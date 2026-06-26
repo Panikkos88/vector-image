@@ -98,6 +98,31 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 **Recommended first build:** prototype items 1+3 as a NEW experimental engine alongside
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
 
+## VM ALGORITHM INTELLIGENCE (from HAR) — 2026-06-26 [claude]  *** READ THIS ***
+Decoded vectormagic.com.har (BOC job pk4ecegitdxeq). VM's real pipeline:
+  POST /api/images (w/h/size) -> upload raster to S3/CloudFront -> WSS /internal/websocket
+  streams progress -> CLASSIFY (imageTypeE=2 logo/AA, imageComplexityE=3 high, usePaletteE=1)
+  -> PALETTE LADDER -> quantize to chosen small palette -> server SEGMENTATION png ->
+  trace -> download /svg|eps|pdf. Multiple variant jobs run (diff complexity/palette).
+KEY = PALETTE LADDER (the secret): VM computes the OPTIMAL palette for every k=2..12+, each
+with a score, auto-picks the elbow. For BOC it picked k=3: #006b84 teal, #fcb828 yellow,
+#f9fafc white. Then quantizes whole image to those 3 -> crisp segmentation (saved
+research/vm-boc-segmentation.png) -> trace. So VM = GLOBAL OPTIMAL SMALL PALETTE + quantize +
+per-color segmentation + clean trace. NOT superpixels, NOT per-region means.
+BOC HEAD-TO-HEAD (699x780 vs original, bg teal):
+                 edge%  MAE%  hot%  paths
+  Vector Magic   2.41   0.17  0.5   55
+  Ours rs16      12.56  1.19  2.9   57
+  Ours rs9       12.62  1.23  2.9   83
+=> VM ~5x better edge at SAME path count. Our SLIC+per-region-mean approach is the WRONG tool
+   for flat logos (too many fuzzy colors). Curve fitting already disproven as the lever.
+REDIRECTED #1 PRIORITY (flat logos): (1) optimal palette estimation (ladder + elbow -> small
+palette ~3-6), (2) quantize image to palette w/ AA edge handling, (3) connected-component
+segmentation PER PALETTE COLOR (not SLIC means), (4) feed clean regions to existing sub-pixel
+boundary + Bezier code. Target: BOC 12.6% -> ~3%. Keep SLIC/gradient path for SHADED content
+(content-adaptive: flat->palette engine, shaded->region engine). Refs: app/assets/vm-boc.svg,
+app/assets/vm-nscar.svg, research/vm-boc-segmentation.png.
+
 ## VM REFERENCE BENCHMARK (the bar to beat) — 2026-06-26 [claude]
 User supplied Vector Magic's output for the NS CAR logo (= app/assets/sample-logo.png).
 Saved VM SVG as app/assets/vm-nscar.svg. HEAD-TO-HEAD vs original raster (1024x724, bg black):
