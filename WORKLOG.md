@@ -119,6 +119,8 @@ ImageTracerJS, so it can be benchmarked against the current output without break
   but full-res was 43.9% pre-fix) -> reconsider downscale-eval for high-edge-density images
   (raise maxEvalDim, or skip downscaling when detail is high). App end-to-end on this logo at
   Medium will still be mediocre until (1)/(2) are addressed; the FIX makes it correct, not yet great.
+  COMMITTED 4a85c8f, pushed. DEPLOYED Cloud Run rev 00008-s8t (borderfix1) 100%; live-verified
+  (0-ring fix in served app.js, /assets/boc-logo-small.png 200).
 - 2026-06-26 [claude] DOWNSCALE-EVAL + COARSE-TO-FINE optimizer speedup (handoff to Codex).
   `optimizeRegionTrace`: NEW `downscaleImageData`; candidates now explored on a 400px copy via
   `evalSource`/`evalReference`/`evalC` (regionSize scaled by downscale factor) + `evalTrace`;
