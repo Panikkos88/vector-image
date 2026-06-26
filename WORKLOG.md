@@ -116,6 +116,16 @@ WHERE WE LACK (priority):
   3. Boundary alignment: VM boundaries sit exactly on tonal edges; SLIC+merge boundaries don't.
   4. Palette coherence: VM ~7 deliberate colors vs our per-region means.
 TARGET: get edge from ~7.5% down toward ~3% on this image, primarily via (1) then (2).
+UPDATE 2026-06-26 [claude]: TESTED priority #1 (curve fitting). Implemented full Schneider
+least-squares cubic Bezier fitting (corner-split + adaptive subdivision) replacing Catmull-Rom.
+HEAD-TO-HEAD on NS CAR: edge 7.53 -> 7.92 (SLIGHTLY WORSE), not better. CONCLUSION: curve
+fitting is NOT the bottleneck — smoother curves don't help when the region BOUNDARIES are
+misplaced. REVERTED (code saved in app.js.bak-0626f-claude-schneider for future reuse/tuning).
+RE-PRIORITIZED gap to VM (2.91% edge): the dominant error is (a) SEGMENTATION/BOUNDARY ALIGNMENT
+(our SLIC+merge regions don't sit on the design's tonal edges) and (b) SHADING REPRESENTATION
+(our per-region linear/radial gradients underperform VM's stacked flat tonal layers). Next work
+should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with flat fills,
+NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
 - 2026-06-26 [claude] CRITICAL BUG FIXED: border-touching region flood-fill (found via the real
