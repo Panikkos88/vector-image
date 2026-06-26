@@ -4598,6 +4598,122 @@ function regionCandidateBeatsCurrent(candidate, best, base, optimizer) {
     (primaryWin || tieBreakWin);
 }
 
+// Recompute per-region color/area/bbox after a label map changes (e.g. after splitting).
+function computeRegionStats(regionLabels, imageData, regionCount) {
+  const { width, height, data } = imageData;
+  const rR = new Float64Array(regionCount);
+  const rG = new Float64Array(regionCount);
+  const rB = new Float64Array(regionCount);
+  const rCnt = new Float64Array(regionCount);
+  const bbox = [];
+  for (let i = 0; i < regionCount; i += 1) bbox[i] = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = y * width + x;
+      const reg = regionLabels[i];
+      if (reg < 0 || reg >= regionCount) continue;
+      const idx = i * 4;
+      rR[reg] += data[idx]; rG[reg] += data[idx + 1]; rB[reg] += data[idx + 2]; rCnt[reg] += 1;
+      const bb = bbox[reg];
+      if (x < bb.minX) bb.minX = x;
+      if (x > bb.maxX) bb.maxX = x;
+      if (y < bb.minY) bb.minY = y;
+      if (y > bb.maxY) bb.maxY = y;
+    }
+  }
+  const regionColor = [];
+  const regionArea = [];
+  for (let r = 0; r < regionCount; r += 1) {
+    const m = rCnt[r] || 1;
+    regionColor[r] = [Math.round(rR[r] / m), Math.round(rG[r] / m), Math.round(rB[r] / m)];
+    regionArea[r] = rCnt[r];
+  }
+  return { regionLabels, regionCount, regionColor, regionArea, bbox, width, height };
+}
+
+// Split one high-error region into two by 2-means on Lab color. Cluster 1 gets a fresh label.
+// Returns the next free label id (unchanged if the split was degenerate / not worthwhile).
+function splitRegionInPlace(labels, src, width, r, nextId, bb) {
+  const idxs = [];
+  for (let y = bb.minY; y <= bb.maxY; y += 1) for (let x = bb.minX; x <= bb.maxX; x += 1) { const i = y * width + x; if (labels[i] === r) idxs.push(i); }
+  if (idxs.length < 24) return nextId;
+  const lab = new Float32Array(idxs.length * 3);
+  let lo = 0; let hi = 0; let loL = 1e9; let hiL = -1;
+  for (let j = 0; j < idxs.length; j += 1) {
+    const o = idxs[j] * 4;
+    const L = rgbToLab(src[o], src[o + 1], src[o + 2]);
+    lab[j * 3] = L[0]; lab[j * 3 + 1] = L[1]; lab[j * 3 + 2] = L[2];
+    if (L[0] < loL) { loL = L[0]; lo = j; }
+    if (L[0] > hiL) { hiL = L[0]; hi = j; }
+  }
+  let c0 = [lab[lo * 3], lab[lo * 3 + 1], lab[lo * 3 + 2]];
+  let c1 = [lab[hi * 3], lab[hi * 3 + 1], lab[hi * 3 + 2]];
+  const assign = new Int8Array(idxs.length);
+  for (let iter = 0; iter < 6; iter += 1) {
+    let s0r = 0; let s0a = 0; let s0b = 0; let n0 = 0; let s1r = 0; let s1a = 0; let s1b = 0; let n1 = 0;
+    for (let j = 0; j < idxs.length; j += 1) {
+      const L = lab[j * 3]; const A = lab[j * 3 + 1]; const B = lab[j * 3 + 2];
+      const d0 = (L - c0[0]) ** 2 + (A - c0[1]) ** 2 + (B - c0[2]) ** 2;
+      const d1 = (L - c1[0]) ** 2 + (A - c1[1]) ** 2 + (B - c1[2]) ** 2;
+      const a = d1 < d0 ? 1 : 0;
+      assign[j] = a;
+      if (a) { s1r += L; s1a += A; s1b += B; n1 += 1; } else { s0r += L; s0a += A; s0b += B; n0 += 1; }
+    }
+    if (!n0 || !n1) return nextId;
+    c0 = [s0r / n0, s0a / n0, s0b / n0];
+    c1 = [s1r / n1, s1a / n1, s1b / n1];
+  }
+  const sep = (c0[0] - c1[0]) ** 2 + (c0[1] - c1[1]) ** 2 + (c0[2] - c1[2]) ** 2;
+  if (sep < 100) return nextId; // clusters too similar (~<10 deltaE) -> not worth splitting
+  let any1 = false;
+  for (let j = 0; j < idxs.length; j += 1) if (assign[j] === 1) { labels[idxs[j]] = nextId; any1 = true; }
+  return any1 ? nextId + 1 : nextId;
+}
+
+// Find high-error regions (by fit residual) and split them; return a refined region map or null.
+function refineRegions(regions, segSource, options) {
+  const { regionLabels, regionCount, regionArea, bbox, width } = regions;
+  const src = segSource.data;
+  const minSplitArea = options.detail === "high" ? 160 : options.detail === "low" ? 320 : 240;
+  const splitThreshold = 90; // mean squared per-channel residual; above this a single fill is poor
+  const maxSplits = 8;
+  const errs = [];
+  for (let r = 0; r < regionCount; r += 1) {
+    if (regionArea[r] < minSplitArea) continue;
+    const bb = bbox[r];
+    const pts = sampleRegionPixels(regionLabels, src, width, r, bb.minX, bb.minY, bb.maxX, bb.maxY);
+    const fit = fitRegionAdaptive(pts);
+    if (!fit) continue;
+    const spp = fit.sse / Math.max(1, pts.length * 3);
+    if (spp > splitThreshold) errs.push({ r, score: spp * Math.log(regionArea[r] + 1) });
+  }
+  if (!errs.length) return null;
+  errs.sort((a, b) => b.score - a.score);
+  const newLabels = Int32Array.from(regionLabels);
+  let nextId = regionCount;
+  let splitCount = 0;
+  for (const e of errs.slice(0, maxSplits)) {
+    const before = nextId;
+    nextId = splitRegionInPlace(newLabels, src, width, e.r, nextId, bbox[e.r]);
+    if (nextId > before) splitCount += 1;
+  }
+  if (!splitCount) return null;
+  const refined = computeRegionStats(newLabels, segSource, nextId);
+  refined.splitCount = splitCount;
+  return refined;
+}
+
+// Refinement guard: accept the split only if edge error clearly improves vs current best,
+// hot pixels don't worsen materially, and path count stays bounded (looser than the global
+// guard because adding detail where it's needed is the whole point).
+function refinementBeatsCurrent(refResult, best, base) {
+  if (!refResult.difference || refResult.difference.error || !best.difference || best.difference.error) return false;
+  const edgeDelta = refResult.difference.edgeWeightedRmse - best.difference.edgeWeightedRmse;
+  const hotDelta = refResult.difference.hotPixelRatio - best.difference.hotPixelRatio;
+  const pathRatio = refResult.paths / Math.max(1, base.paths);
+  return edgeDelta < -0.001 && hotDelta <= 0.005 && pathRatio <= 2.2;
+}
+
 async function optimizeRegionTrace(segSource, referenceImageData, pipelineOptions, backgroundColor) {
   const candidates = regionEngineCandidates(segSource, pipelineOptions);
   const optimizer = {
@@ -4640,8 +4756,8 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
   const keyOf = (c) => `${c.regionSize}|${c.mergeThreshold}|${c.compactness}|${c.iterations}`;
   const evaluated = new Map();
   for (const result of results) evaluated.set(keyOf(result.candidate), result);
-  const maxEvals = 16;
-  const maxRounds = 4;
+  const maxEvals = 9; // budget: most of the gain comes from the first few neighbours
+  const maxRounds = 2;
   let localRounds = 0;
   // Only refine when the global sweep already found a winner worth climbing around. If base
   // won, it's the unperturbed centre — neighbours rarely beat it and it isn't worth the extra
@@ -4683,8 +4799,36 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
     }
   }
 
+  // Per-region micro-candidates (#5 real lever, 2026-06-26 [claude]): split the winner's
+  // high-error regions and keep the split only if it clearly improves edge accuracy.
+  const refinementInfo = { applied: false, attempted: false, splitRegions: 0 };
+  try {
+    const s = best.candidate;
+    const slicR = computeSlicSuperpixels(segSource, { regionSize: s.regionSize, compactness: s.compactness, iterations: s.iterations });
+    const regionsR = mergeSuperpixels(slicR, segSource, { mergeThreshold: s.mergeThreshold });
+    const refined = refineRegions(regionsR, segSource, pipelineOptions);
+    if (refined) {
+      refinementInfo.attempted = true;
+      refinementInfo.splitRegions = refined.splitCount;
+      const refinedTraced = traceRegionsToSvg(refined, pipelineOptions, segSource);
+      refinedTraced.pathCount = countSvgElements(refinedTraced.svg, "path");
+      let diff = null;
+      try { diff = await measureSvgDifference(referenceImageData, refinedTraced.svg, guardOptions); } catch (error) { diff = { error: error.message }; }
+      const refResult = { candidate: { name: "region-split", label: `Per-region split (${refined.splitCount})` }, traced: refinedTraced, difference: diff, paths: refinedTraced.pathCount };
+      results.push(refResult);
+      refinementInfo.refinedPaths = refResult.paths;
+      refinementInfo.refinedEdgeRmse = diff && !diff.error ? diff.edgeWeightedRmse : null;
+      refinementInfo.baseEdgeRmse = base.difference && !base.difference.error ? base.difference.edgeWeightedRmse : null;
+      if (refinementBeatsCurrent(refResult, best, base)) { best = refResult; refinementInfo.applied = true; }
+    }
+    await nextFrame();
+  } catch (error) {
+    refinementInfo.error = error.message;
+  }
+
   const selected = best.candidate.name !== "base";
   best.traced.regionOptimization = {
+    refinement: refinementInfo,
     enabled: optimizer.enabled,
     selected,
     guardReason: selected ? "difference guard selected better region candidate" : "difference guard kept base region candidate",

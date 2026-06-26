@@ -80,8 +80,13 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
    - LOCAL SEARCH (2026-06-26 [claude]): bounded hill-climb (±regionSize/merge/compactness) around
      the winner, GATED to run only when the global sweep beat base (keeps common case fast).
      Verified do-no-harm; on our test images base is already locally optimal so it changes nothing.
-   - NEXT (the real lever): per-region MICRO-CANDIDATES for high-error regions (split / alt-fit /
-     alt-merge per region), not just one global SLIC setting. This is where accuracy headroom is.
+   - MICRO-CANDIDATES (2026-06-26 [claude]): DONE. High-error regions (by fit residual) are
+     split via 2-means Lab color into sub-regions, re-traced, kept only if edge clearly improves
+     (looser path guard). Verified do-no-harm; on shaded the split was worse (radial already wins)
+     so guard rejected; on the logo the optimizer (local search) won 7.65->6.94 edge, fewer paths.
+   - NEXT (runtime, important): optimizer evaluates candidates at FULL res -> 27s on a 1024px
+     logo. Fix = DOWNSCALE-EVAL: explore candidates on a ~400px copy (scale regionSize by the
+     downscale factor), pick winning settings, do ONE full-res final trace. Should cut to <8s.
 5. Real gradient/diffusion-curve modeling for glows/shadows (soft-effect layer is flat blur today).
 6. Image-type classifier to auto-select pipeline (photo vs blended artwork vs flat).
 
@@ -89,6 +94,21 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
 
 ## Change Log  (newest first)
+- 2026-06-26 [claude] #5 PER-REGION MICRO-CANDIDATES (split) added to `optimizeRegionTrace`.
+  NEW `computeRegionStats`, `splitRegionInPlace` (2-means Lab split of one region),
+  `refineRegions` (find high-residual regions via fitRegionAdaptive, split top-N, rebuild),
+  `refinementBeatsCurrent` (guard: edge must improve >0.1pt vs best, hot slack 0.5pt, paths
+  <=2.2x base). Integrated after local search; adds a `region-split` candidate + `refinement`
+  stats. Trimmed local search budget maxEvals 16->9, maxRounds 4->2 (most gain is early).
+  Snapshot app.js.bak-0626d-claude-microcand. Cache `?v=20260626-microcand1`. node --check OK.
+  VERIFIED (preview, Region engine):
+    SHADED-test (512px): split tried (region-split edge 4.27% vs base 4.09%) -> guard REJECTED
+      (radial gradient already wins on smooth shading); kept base. Do-no-harm. ~9s.
+    LOGO (1024px): optimizer SELECTED a local-search candidate, edge 7.65% -> 6.94%, paths
+      28 -> ~25 (better edge AND fewer paths). Real quality win. ~27s.
+  HONEST: micro-candidate split targets WRONGLY-MERGED / bimodal regions (different failure mode
+  than smooth shading, which radial handles). It engages and the guard never lets it hurt.
+  Main downside = runtime (full-res candidate eval); downscale-eval is the planned fix (Next #4).
 - 2026-06-26 [claude] RESUMED Codex's #5 (inversion loop): added bounded LOCAL SEARCH to
   `optimizeRegionTrace` (app.js ~L4601). After the global candidate sweep, hill-climbs by
   perturbing regionSize/mergeThreshold/compactness (±2) around the winner, keeping a neighbour
@@ -104,6 +124,13 @@ ImageTracerJS, so it can be benchmarked against the current output without break
   optimizer's ceiling for images where a global candidate wins, at no cost to the common case.
   Real accuracy lever is still per-region micro-candidates (see Next Steps #4). Reconciled with
   Codex's focused-region1 build via git (clean tree, commit 4a824b9) before editing.
+  COMMITTED 5bd8f8f, pushed to GitHub (origin/main). DEPLOYED to Cloud Run revision
+  `vector-accuracy-studio-00006-7jk` (region-opt2), serving 100%. Live verified via HTTP:
+  index 200, app.js?v=region-opt2 200 + contains localSearchRounds, shaded-test 200.
+  NOTE: Claude_Preview is sandboxed to the local server (can't drive the remote origin), so
+  the functional trace test (948ms, base kept, MAE 1.10/edge 4.09/hot 2.8/10p) ran on the
+  byte-identical local copy of the deployed commit. For a true remote in-browser test, use
+  Claude_in_Chrome or open the URL manually.
 - 2026-06-26 [codex] Focused UI on the active Region engine.
   Snapshot before edit: `app/index.html.bak-0626-codex-focused-ui` and
   `app/app.js.bak-0626-codex-focused-ui`.
