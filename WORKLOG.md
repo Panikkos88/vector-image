@@ -123,6 +123,57 @@ boundary + Bezier code. Target: BOC 12.6% -> ~3%. Keep SLIC/gradient path for SH
 (content-adaptive: flat->palette engine, shaded->region engine). Refs: app/assets/vm-boc.svg,
 app/assets/vm-nscar.svg, research/vm-boc-segmentation.png.
 
+## PALETTE ENGINE SPEC (next major build) — 2026-06-26 [claude]  *** START HERE ***
+GOAL: a new engine for FLAT logos that mirrors VM's path and closes the gap (BOC 12.6% -> ~3%
+edge; NS CAR 7.5% -> ~3%). Build as a NEW engine option ("Palette engine") alongside the
+Region engine so nothing existing breaks. Verify each step vs app/assets/vm-boc.svg +
+vm-nscar.svg using measureSvgDifference. Do it in small commits, browser-verified each time.
+Reuse existing: loopToSmoothSubpath (sub-pixel Bezier finish), extractIsoSegments/
+linkSegmentsIntoLoops (contour), measureSvgDifference (guard/benchmark), fitRegionAdaptive
+(only if a region needs a gradient — flat logos usually won't).
+
+STEP 1 — Optimal palette estimation ("palette ladder").
+  - For k = 2..~16, compute the best k-color palette (k-means in Lab on a sample of pixels;
+    seed with k-means++). Record per-k quantization error (mean Lab distance).
+  - Pick k at the "elbow" (error drop flattens) -> small palette (VM picked 3 for BOC).
+    Expose an override so we can force k for testing.
+  - ACCEPTANCE: on BOC the auto-pick lands k=3-4 with colors ~ {#006b84, #fcb828, #f9fafc}.
+
+STEP 2 — Quantize to palette with anti-aliased edge handling.
+  - Assign each pixel to nearest palette color (Lab). At edges, keep coverage so boundaries
+    can be placed sub-pixel (reuse the coverage idea from recoverAntialiasCoverage rather than
+    a hard snap). Output a per-pixel label map (palette index).
+  - ACCEPTANCE: quantized preview visually matches VM's segmentation
+    (research/vm-boc-segmentation.png): crisp teal/white/yellow, clean edges.
+
+STEP 3 — Per-color connected-component segmentation.
+  - For each palette color, find connected components (flood/union-find) = regions. This
+    REPLACES SLIC for flat art (SLIC+per-region-mean was the wrong tool -> 12.6%).
+  - Drop/merge tiny speckle components (area threshold). Keep holes (a region inside another).
+  - ACCEPTANCE: BOC yields a few dozen clean components (bg, frame, yellow band, each glyph/
+    leaf/dot), comparable to VM's ~55 paths.
+
+STEP 4 — Trace + finish (reuse existing).
+  - Per component: marching-squares iso on its mask (with the +1 zero-ring border fix already
+    in traceRegionsToSvg), link loops, sub-pixel place, loopToSmoothSubpath for Beziers.
+  - Fill each component with its PALETTE color (flat). Painter's order largest-first; holes via
+    even-odd or paint-over (as today). Full-canvas base = largest region (border-gap fix).
+  - ACCEPTANCE (the target): BOC edge <= ~4% at <= ~60 paths; NS CAR <= ~4%. Compare to VM
+    2.41%/2.91%. If close, this is the flat-logo engine.
+
+STEP 5 — Content-adaptive routing.
+  - Quick classifier: flat vs shaded/photo (e.g. palette-ladder elbow k is small + low residual
+    => flat; high k / smooth gradients => shaded). Route flat -> Palette engine, shaded ->
+    Region engine (which already wins on the spheres/NS-CAR-shading).
+
+STEP 6 — Standing VM benchmark harness.
+  - Script/page action: for each test logo, measure our output vs the VM reference SVG and the
+    original; print edge/MAE/hot/paths table. Run it after every change. Targets = VM numbers.
+
+DE-PRIORITIZED (do NOT chase first): Schneider curve fitting (disproven as the lever; code saved
+in app.js.bak-0626f-claude-schneider, revisit for tidiness later); more optimizer tuning
+(downscale-eval/promote-N WIP parked). 
+
 ## VM REFERENCE BENCHMARK (the bar to beat) — 2026-06-26 [claude]
 User supplied Vector Magic's output for the NS CAR logo (= app/assets/sample-logo.png).
 Saved VM SVG as app/assets/vm-nscar.svg. HEAD-TO-HEAD vs original raster (1024x724, bg black):
