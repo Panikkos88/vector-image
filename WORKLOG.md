@@ -87,7 +87,7 @@ ImageTracerJS, so it can be benchmarked against the current output without break
   Added ignore rules for `node_modules/`, local backup snapshots (`*.bak-*`), logs, local
   env files, and generated build/coverage folders. Added line-ending/binary attributes for
   source files and assets. Updated protocol/current state to note that Git now exists on branch `main`.
-  Baseline commit: `Initial Vector Accuracy Studio baseline` (created after this entry).
+  Baseline commit: `4df0a7e` (`Initial Vector Accuracy Studio baseline`).
   Benchmark result: not rerun; this is version-control setup only. Previous Cloud UI test
   remains the latest functional verification.
 - 2026-06-26 [codex] DEPLOYED region optimizer build to Google Cloud Run.
