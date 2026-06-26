@@ -4634,12 +4634,62 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
     if (regionCandidateBeatsCurrent(result, best, base, optimizer)) best = result;
   }
 
+  // Local search (resume of #5, 2026-06-26 [claude]): hill-climb in the neighbourhood of the
+  // winning candidate. Perturb regionSize/mergeThreshold/compactness by small steps and keep
+  // moving while a neighbour beats current best within the same guards. Bounded by maxEvals.
+  const keyOf = (c) => `${c.regionSize}|${c.mergeThreshold}|${c.compactness}|${c.iterations}`;
+  const evaluated = new Map();
+  for (const result of results) evaluated.set(keyOf(result.candidate), result);
+  const maxEvals = 16;
+  const maxRounds = 4;
+  let localRounds = 0;
+  // Only refine when the global sweep already found a winner worth climbing around. If base
+  // won, it's the unperturbed centre — neighbours rarely beat it and it isn't worth the extra
+  // candidate traces. This keeps the common case fast and spends compute only when promising.
+  let improved = best.candidate.name !== "base";
+  while (improved && localRounds < maxRounds && evaluated.size < maxEvals) {
+    improved = false;
+    localRounds += 1;
+    const c = best.candidate;
+    const mk = (tag, dRegion, dMerge, dCompact) => ({
+      name: `local-${tag}`,
+      label: `Local search ${tag}`,
+      regionSize: clamp(c.regionSize + dRegion, 6, 42),
+      mergeThreshold: clamp(c.mergeThreshold + dMerge, 4, 24),
+      compactness: clamp(c.compactness + dCompact, 6, 18),
+      iterations: c.iterations
+    });
+    const neighbours = [
+      mk("rs-", -2, 0, 0), mk("rs+", 2, 0, 0),
+      mk("mt-", 0, -2, 0), mk("mt+", 0, 2, 0),
+      mk("cp-", 0, 0, -2), mk("cp+", 0, 0, 2)
+    ];
+    for (const nb of neighbours) {
+      if (evaluated.size >= maxEvals) break;
+      const k = keyOf(nb);
+      if (evaluated.has(k)) continue;
+      const traced = traceRegionCandidate(segSource, pipelineOptions, nb);
+      let difference = null;
+      try {
+        difference = await measureSvgDifference(referenceImageData, traced.svg, guardOptions);
+      } catch (error) {
+        difference = { error: error.message };
+      }
+      const result = { candidate: nb, traced, difference, paths: traced.pathCount };
+      evaluated.set(k, result);
+      results.push(result);
+      if (regionCandidateBeatsCurrent(result, best, base, optimizer)) { best = result; improved = true; }
+      await nextFrame();
+    }
+  }
+
   const selected = best.candidate.name !== "base";
   best.traced.regionOptimization = {
     enabled: optimizer.enabled,
     selected,
     guardReason: selected ? "difference guard selected better region candidate" : "difference guard kept base region candidate",
     candidatesTested: results.length,
+    localSearchRounds: localRounds,
     selectedCandidate: best.candidate.name,
     selectedLabel: best.candidate.label,
     baselineEdgeRmse: base.difference?.edgeWeightedRmse,

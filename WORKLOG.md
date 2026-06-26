@@ -75,10 +75,13 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
    with SLIC superpixels → region merging.
 3. **Coverage-driven boundary fitting.** Fit region boundaries to the coverage crossing,
    then to cubic Béziers w/ corner detection. Demote ImageTracerJS to a comparison baseline.
-4. FIRST PASS (2026-06-26 [codex]) **Turn the metric guard into an optimizer.**
-   Region engine now tests guarded SLIC/merge candidates and records `regionOptimization`.
-   NEXT: make this a real local search around the selected candidate, and add shape/fill
-   micro-candidates for high-error regions rather than only global SLIC settings.
+4. IN PROGRESS **Turn the metric guard into an optimizer.**
+   - FIRST PASS (2026-06-26 [codex]): guarded global SLIC/merge candidate sweep + `regionOptimization`.
+   - LOCAL SEARCH (2026-06-26 [claude]): bounded hill-climb (±regionSize/merge/compactness) around
+     the winner, GATED to run only when the global sweep beat base (keeps common case fast).
+     Verified do-no-harm; on our test images base is already locally optimal so it changes nothing.
+   - NEXT (the real lever): per-region MICRO-CANDIDATES for high-error regions (split / alt-fit /
+     alt-merge per region), not just one global SLIC setting. This is where accuracy headroom is.
 5. Real gradient/diffusion-curve modeling for glows/shadows (soft-effect layer is flat blur today).
 6. Image-type classifier to auto-select pipeline (photo vs blended artwork vs flat).
 
@@ -86,6 +89,21 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
 
 ## Change Log  (newest first)
+- 2026-06-26 [claude] RESUMED Codex's #5 (inversion loop): added bounded LOCAL SEARCH to
+  `optimizeRegionTrace` (app.js ~L4601). After the global candidate sweep, hill-climbs by
+  perturbing regionSize/mergeThreshold/compactness (±2) around the winner, keeping a neighbour
+  only if it beats current best within the SAME guards; bounded by maxEvals=16 / maxRounds=4.
+  GATED: only runs when the global sweep already beat base (`improved = best.name !== "base"`),
+  so the common case stays fast. Added `localSearchRounds` to regionOptimization stats.
+  Snapshot app.js.bak-0626c-claude-localsearch. Cache `?v=20260626-region-opt2`. node --check OK.
+  VERIFIED LIVE-LOCAL (preview, Region engine, shaded-test, Medium):
+    - ungated test: 9 candidates tested incl. 6 local neighbours -> guard kept base (do-no-harm),
+      12.4s (too slow) -> added the gate.
+    - gated: 948 ms, 3 candidates, kept base, metrics identical MAE 1.10 / edge 4.09 / hot 2.8 / 10p.
+  HONEST: doesn't move numbers on our test images (base already locally optimal); raises the
+  optimizer's ceiling for images where a global candidate wins, at no cost to the common case.
+  Real accuracy lever is still per-region micro-candidates (see Next Steps #4). Reconciled with
+  Codex's focused-region1 build via git (clean tree, commit 4a824b9) before editing.
 - 2026-06-26 [codex] Focused UI on the active Region engine.
   Snapshot before edit: `app/index.html.bak-0626-codex-focused-ui` and
   `app/app.js.bak-0626-codex-focused-ui`.
