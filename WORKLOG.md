@@ -101,7 +101,10 @@ ImageTracerJS, so it can be benchmarked against the current output without break
   engine/detail/anti-alias buttons, no coverage panel, settings show Region engine (SLIC) /
   Medium / Smooth / Guarded region loop. Shaded Test trace completed using Region engine,
   with Region optimizer kept base after 3 candidates; metrics MAE 1.10%, edge 4.09%,
-  hot 2.8%, 10 paths, 4 gradients.
+  hot 2.8%, 10 paths, 4 gradients. Pushed to GitHub as `dd965db`; deployed to Cloud Run
+  revision `vector-accuracy-studio-00005-hbt` serving 100% traffic. Cloud UI test confirmed
+  the focused settings panel has zero engine/detail/anti-alias buttons, no coverage panel,
+  and Shaded Test trace completed with Region engine + Region optimizer in 3794 ms.
 - 2026-06-26 [codex] Connected local Git repo to GitHub.
   Files touched: `README.md` (merge conflict resolution), `WORKLOG.md`; Git remote `origin`
   added as `https://github.com/Panikkos88/vector-image.git`.
