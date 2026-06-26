@@ -98,6 +98,25 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 **Recommended first build:** prototype items 1+3 as a NEW experimental engine alongside
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
 
+## VM REFERENCE BENCHMARK (the bar to beat) — 2026-06-26 [claude]
+User supplied Vector Magic's output for the NS CAR logo (= app/assets/sample-logo.png).
+Saved VM SVG as app/assets/vm-nscar.svg. HEAD-TO-HEAD vs original raster (1024x724, bg black):
+                 edge%   MAE%   hot%   paths   gradients
+  Vector Magic   2.91    0.41   1.4    34      0
+  Ours rs16      7.53    1.68   4.1    53      24
+  Ours rs10      7.78    1.70   4.2    140     80
+=> VM is ~2.6x better edge / 4x better MAE with FEWER paths and NO gradients. More paths do
+   NOT help us (140 was worse) -> our deficit is QUALITY not budget.
+WHERE WE LACK (priority):
+  1. CURVE FITTING (biggest): VM = clean minimal cubic Beziers; we Catmull-Rom through marching-
+     squares pixel points -> bumpy/imprecise edges. NEED least-squares Bezier fit (Schneider) +
+     corner detection + adaptive error. Highest-impact next task.
+  2. SHADING: VM uses ~5 stacked FLAT tonal shapes (no gradients) and wins; our 24 linear/radial
+     gradients LOSE. Reconsider gradient approach vs finer tonal segmentation + flat fills.
+  3. Boundary alignment: VM boundaries sit exactly on tonal edges; SLIC+merge boundaries don't.
+  4. Palette coherence: VM ~7 deliberate colors vs our per-region means.
+TARGET: get edge from ~7.5% down toward ~3% on this image, primarily via (1) then (2).
+
 ## Change Log  (newest first)
 - 2026-06-26 [claude] CRITICAL BUG FIXED: border-touching region flood-fill (found via the real
   KOINO/boc logo). `traceRegionsToSvg` built the per-region marching-squares field WITHOUT a
