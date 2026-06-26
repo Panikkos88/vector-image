@@ -1,0 +1,9 @@
+# Keep the Cloud Build upload small. The app uses app/vendor/* (vendored), NOT node_modules.
+node_modules/
+**/*.bak-*
+research/
+work/
+*.md
+.git/
+.claude/
+PROJECT_PLAN.md

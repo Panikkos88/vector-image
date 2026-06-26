@@ -1,0 +1,18 @@
+* text=auto
+
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.svg text eol=lf
+Dockerfile text eol=lf
+*.template text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.wasm binary

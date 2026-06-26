@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vector Accuracy Studio</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="toolbar" aria-label="Vectorizer controls">
+        <div class="brand">
+          <h1>Vector Accuracy Studio</h1>
+          <p>Local raster-to-SVG prototype</p>
+        </div>
+
+        <label class="file-picker">
+          <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+          <span>Open Image</span>
+        </label>
+        <button id="sampleButton" type="button">Load Sample</button>
+        <button id="shadedButton" type="button">Load Shaded Test</button>
+
+        <button id="traceButton" type="button" disabled>Trace</button>
+        <button id="downloadButton" type="button" disabled>Download SVG</button>
+      </section>
+
+      <section id="dropZone" class="drop-zone">
+        <strong>Drop an image here</strong>
+        <span>or use Open Image</span>
+      </section>
+
+      <section class="workspace">
+        <article class="panel">
+          <header>
+            <h2>Original</h2>
+            <span id="originalMeta">No image loaded</span>
+          </header>
+          <canvas id="originalCanvas"></canvas>
+        </article>
+
+        <article class="panel">
+          <header>
+            <h2>Quantized</h2>
+            <span id="quantizedMeta">Waiting</span>
+          </header>
+          <canvas id="quantizedCanvas"></canvas>
+        </article>
+
+        <article class="panel">
+          <header>
+            <h2>SVG Preview</h2>
+            <span id="svgMeta">Waiting</span>
+          </header>
+          <div id="svgPreview" class="svg-preview"></div>
+        </article>
+
+        <article class="panel">
+          <header>
+            <h2>Difference</h2>
+            <span id="differenceMeta">Waiting</span>
+          </header>
+          <canvas id="differenceCanvas" class="difference-canvas"></canvas>
+        </article>
+
+        <article class="panel">
+          <header>
+            <h2>Coverage (debug)</h2>
+            <span id="coverageMeta">Off</span>
+          </header>
+          <canvas id="coverageCanvas" class="difference-canvas"></canvas>
+        </article>
+      </section>
+
+      <section class="settings-grid">
+        <aside class="settings-panel" aria-label="Vectorization settings">
+          <h2>Coverage Engine Testing</h2>
+
+          <section>
+            <h3>Engine</h3>
+            <div class="segmented vertical" data-group="engine">
+              <button type="button" class="selected" data-engine="imagetracer">ImageTracerJS baseline</button>
+              <button type="button" data-engine="coverage">Coverage engine (fg/bg)</button>
+              <button type="button" data-engine="regions">Region engine (SLIC)</button>
+            </div>
+          </section>
+
+          <section>
+            <h3>Detail Level</h3>
+            <div class="segmented" data-group="detail">
+              <button type="button" data-detail="low">Low</button>
+              <button type="button" class="selected" data-detail="medium">Medium</button>
+              <button type="button" data-detail="high">High</button>
+            </div>
+          </section>
+
+          <section>
+            <h3>Anti-aliasing</h3>
+            <div class="segmented" data-group="antiAlias">
+              <button type="button" data-anti-alias="off">Off</button>
+              <button type="button" data-anti-alias="balanced">Balanced</button>
+              <button type="button" class="selected" data-anti-alias="smooth">Smooth</button>
+            </div>
+          </section>
+
+          <section class="prototype-settings">
+            <h3>Debug</h3>
+            <label class="checkbox-control">
+              <input id="showCoverageMap" type="checkbox" checked>
+              Show coverage map
+            </label>
+            <label class="checkbox-control">
+              <input id="showSegmentation" type="checkbox">
+              Show segmentation (SLIC)
+            </label>
+          </section>
+        </aside>
+
+        <section class="details">
+        <div>
+          <h2>Palette</h2>
+          <div id="palette" class="palette"></div>
+        </div>
+        <div>
+          <h2>Trace Log</h2>
+          <pre id="log">Load an image to begin.</pre>
+        </div>
+        <div>
+          <h2>Benchmark Ledger</h2>
+          <div class="benchmark-actions">
+            <button id="setBaselineButton" type="button" disabled>Set Baseline</button>
+            <button id="compareBaselineButton" type="button" disabled>Compare To Baseline</button>
+            <button id="exportBenchmarkButton" type="button" disabled>Export JSON</button>
+            <button id="clearBenchmarkButton" type="button" disabled>Clear Runs</button>
+          </div>
+          <div id="benchmarkSummary" class="benchmark-summary">No benchmark runs yet.</div>
+          <div id="benchmarkDelta" class="metric-deltas"></div>
+          <ol id="benchmarkRuns" class="benchmark-run-list"></ol>
+        </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="./vendor/imagetracer.js"></script>
+    <script src="./background-detach.js?v=20260626-hybrid1"></script>
+    <script src="./app.js?v=20260626-region-opt1"></script>
+  </body>
+</html>

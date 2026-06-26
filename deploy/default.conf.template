@@ -1,0 +1,15 @@
+server {
+    listen       ${PORT};
+    server_name  _;
+    root         /usr/share/nginx/html;
+    index        index.html;
+
+    # WASM (vtracer) must be served with the correct MIME type.
+    location ~ \.wasm$ {
+        default_type application/wasm;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
