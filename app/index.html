@@ -63,56 +63,29 @@
           <canvas id="differenceCanvas" class="difference-canvas"></canvas>
         </article>
 
-        <article class="panel">
-          <header>
-            <h2>Coverage (debug)</h2>
-            <span id="coverageMeta">Off</span>
-          </header>
-          <canvas id="coverageCanvas" class="difference-canvas"></canvas>
-        </article>
       </section>
 
       <section class="settings-grid">
         <aside class="settings-panel" aria-label="Vectorization settings">
-          <h2>Coverage Engine Testing</h2>
+          <h2>Active Vector Engine</h2>
 
-          <section>
-            <h3>Engine</h3>
-            <div class="segmented vertical" data-group="engine">
-              <button type="button" class="selected" data-engine="imagetracer">ImageTracerJS baseline</button>
-              <button type="button" data-engine="coverage">Coverage engine (fg/bg)</button>
-              <button type="button" data-engine="regions">Region engine (SLIC)</button>
+          <section class="active-settings">
+            <div class="setting-row">
+              <span>Engine</span>
+              <strong>Region engine (SLIC)</strong>
             </div>
-          </section>
-
-          <section>
-            <h3>Detail Level</h3>
-            <div class="segmented" data-group="detail">
-              <button type="button" data-detail="low">Low</button>
-              <button type="button" class="selected" data-detail="medium">Medium</button>
-              <button type="button" data-detail="high">High</button>
+            <div class="setting-row">
+              <span>Detail</span>
+              <strong>Medium</strong>
             </div>
-          </section>
-
-          <section>
-            <h3>Anti-aliasing</h3>
-            <div class="segmented" data-group="antiAlias">
-              <button type="button" data-anti-alias="off">Off</button>
-              <button type="button" data-anti-alias="balanced">Balanced</button>
-              <button type="button" class="selected" data-anti-alias="smooth">Smooth</button>
+            <div class="setting-row">
+              <span>Anti-aliasing</span>
+              <strong>Smooth</strong>
             </div>
-          </section>
-
-          <section class="prototype-settings">
-            <h3>Debug</h3>
-            <label class="checkbox-control">
-              <input id="showCoverageMap" type="checkbox" checked>
-              Show coverage map
-            </label>
-            <label class="checkbox-control">
-              <input id="showSegmentation" type="checkbox">
-              Show segmentation (SLIC)
-            </label>
+            <div class="setting-row">
+              <span>Optimization</span>
+              <strong>Guarded region loop</strong>
+            </div>
           </section>
         </aside>
 
@@ -143,6 +116,6 @@
 
     <script src="./vendor/imagetracer.js"></script>
     <script src="./background-detach.js?v=20260626-hybrid1"></script>
-    <script src="./app.js?v=20260626-region-opt1"></script>
+    <script src="./app.js?v=20260626-focused-region1"></script>
   </body>
 </html>

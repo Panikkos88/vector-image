@@ -48,6 +48,9 @@ Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
 GitHub remote `origin` points to https://github.com/Panikkos88/vector-image.git.
+UI is now focused on the active engine only: Region engine (SLIC), Medium detail, Smooth
+anti-aliasing, and the guarded region optimizer. Older engine/debug selectors are hidden to
+avoid confusion while development stays on the Region engine path.
 
 Quality is near the ceiling of the current "quantize → trace regions → patch" architecture.
 Recent post-passes (sub-pixel nudge, background detach v1/v2, micro-prune) are mostly
@@ -83,6 +86,22 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
 
 ## Change Log  (newest first)
+- 2026-06-26 [codex] Focused UI on the active Region engine.
+  Snapshot before edit: `app/index.html.bak-0626-codex-focused-ui` and
+  `app/app.js.bak-0626-codex-focused-ui`.
+  Files touched:
+    - `app/app.js`: changed default `selectorState.engine` to `regions`; adjusted trace-log
+      wording for hidden coverage/segmentation debug controls.
+    - `app/index.html`: removed visible engine/detail/anti-alias/debug selectors and the
+      Coverage debug panel; replaced settings panel with fixed Active Vector Engine summary;
+      cache-busted app.js to `?v=20260626-focused-region1`.
+    - `app/styles.css`: added `active-settings` / `setting-row` styling.
+    - `WORKLOG.md`: recorded focused UI state.
+  Checks: `npm run check` OK. Browser UI test at `http://localhost:8787/` confirmed zero
+  engine/detail/anti-alias buttons, no coverage panel, settings show Region engine (SLIC) /
+  Medium / Smooth / Guarded region loop. Shaded Test trace completed using Region engine,
+  with Region optimizer kept base after 3 candidates; metrics MAE 1.10%, edge 4.09%,
+  hot 2.8%, 10 paths, 4 gradients.
 - 2026-06-26 [codex] Connected local Git repo to GitHub.
   Files touched: `README.md` (merge conflict resolution), `WORKLOG.md`; Git remote `origin`
   added as `https://github.com/Panikkos88/vector-image.git`.

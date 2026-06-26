@@ -327,6 +327,33 @@ canvas {
   background: #f8faff;
 }
 
+.active-settings {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faff;
+}
+
+.setting-row {
+  display: grid;
+  gap: 3px;
+  padding: 9px 0;
+}
+
+.setting-row + .setting-row {
+  border-top: 1px solid var(--line);
+}
+
+.setting-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setting-row strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
 .palette {
   display: flex;
   flex-wrap: wrap;

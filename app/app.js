@@ -54,7 +54,7 @@ const BENCHMARK_STORAGE_KEY = "vectorAccuracyStudio.benchmarkRuns.v1";
 const MAX_BENCHMARK_RUNS = 80;
 
 const selectorState = {
-  engine: "imagetracer",
+  engine: "regions",
   imageType: "artwork-aa",
   detail: "medium",
   antiAlias: "smooth",
@@ -4980,7 +4980,7 @@ async function traceCurrentImage() {
   } else if (coverageCanvas) {
     coverageCanvas.getContext("2d").clearRect(0, 0, coverageCanvas.width, coverageCanvas.height);
     coverageMeta.textContent = coverageField.length
-      ? `${coverageStats.count} samples (enable "Show coverage map" to view)`
+      ? `${coverageStats.count} samples captured (debug overlay hidden in focused UI)`
       : "Off (needs blended-edge artwork, anti-aliasing on)";
   }
 
@@ -5021,8 +5021,8 @@ async function traceCurrentImage() {
     `Edge-preserving filter: ${filtered.enabled ? `${filtered.smoothedPixels} pixels, radius ${filtered.radius}, color sigma ${filtered.sigmaColor}` : "off"}`,
     `Coverage edge recovery: ${coverageRecovered.enabled ? `${coverageRecovered.edgePixels} edge pixels (${coverageRecovered.snappedToBackground} to bg, ${coverageRecovered.snappedToForeground} to fg), bg ${rgbToHex(coverageRecovered.backgroundColor)}` : "off"}`,
     `Coverage map (step 1): ${coverageStats.count} sub-pixel samples captured${coverageStats.count ? `, alpha mean ${coverageStats.mean.toFixed(2)} (min ${coverageStats.min.toFixed(2)}, max ${coverageStats.max.toFixed(2)})` : ""}`,
-    `Sub-pixel boundary (step 2a/2b): ${boundarySegmentCount ? `${boundarySegmentCount} segments -> ${boundaryClosedLoops} closed, ${boundaryBorderLoops} border, ${boundaryOpenLoops} open` : "not extracted (enable coverage debug)"}`,
-    `Segmentation (step 1 of VM roadmap): ${segmentationCount ? `${segmentationCount} SLIC superpixels (Lab)` : "off (enable segmentation debug)"}`,
+    `Sub-pixel boundary (step 2a/2b): ${boundarySegmentCount ? `${boundarySegmentCount} segments -> ${boundaryClosedLoops} closed, ${boundaryBorderLoops} border, ${boundaryOpenLoops} open` : "debug overlay hidden in focused UI"}`,
+    `Segmentation (step 1 of VM roadmap): ${segmentationCount ? `${segmentationCount} SLIC superpixels (Lab)` : "Region engine uses SLIC internally"}`,
     `Small detail protection: ${detailProtected.enabled ? `${detailProtected.restoredPixels} pixels restored across ${detailProtected.protectedComponents} protected components (${detailProtected.candidateComponents} candidates)` : "off"}`,
     `Background mode: ${removeLargestColor ? "transparent, clustered" : "solid rect, clustered"}`,
     `Background labels merged/skipped: ${traced.skippedBackgroundLabels}`,
