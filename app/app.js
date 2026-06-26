@@ -4714,8 +4714,28 @@ function refinementBeatsCurrent(refResult, best, base) {
   return edgeDelta < -0.001 && hotDelta <= 0.005 && pathRatio <= 2.2;
 }
 
+// Downscale an ImageData to a max dimension via canvas (high-quality), for fast optimizer eval.
+function downscaleImageData(imageData, maxDim) {
+  const { width, height } = imageData;
+  const scale = Math.min(1, maxDim / Math.max(width, height));
+  if (scale >= 1) return imageData;
+  const w = Math.max(1, Math.round(width * scale));
+  const h = Math.max(1, Math.round(height * scale));
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = width;
+  srcCanvas.height = height;
+  srcCanvas.getContext("2d").putImageData(imageData, 0, 0);
+  const dstCanvas = document.createElement("canvas");
+  dstCanvas.width = w;
+  dstCanvas.height = h;
+  const ctx = dstCanvas.getContext("2d", { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(srcCanvas, 0, 0, w, h);
+  return ctx.getImageData(0, 0, w, h);
+}
+
 async function optimizeRegionTrace(segSource, referenceImageData, pipelineOptions, backgroundColor) {
-  const candidates = regionEngineCandidates(segSource, pipelineOptions);
   const optimizer = {
     enabled: true,
     minEdgeImprovement: 0.00005,
@@ -4725,24 +4745,27 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
     maxPathGrowth: 1.1
   };
   const guardOptions = { backgroundColor };
-  const results = [];
 
-  for (const candidate of candidates) {
-    const traced = traceRegionCandidate(segSource, pipelineOptions, candidate);
+  // Downscale-eval: explore candidates on a small copy (fast), trace the winner at full res.
+  // regionSize is in pixels so it's scaled by the downscale factor for the eval traces; the
+  // ORIGINAL full-res settings are kept on each candidate for the final trace.
+  const maxEvalDim = 400;
+  const downscaled = Math.max(segSource.width, segSource.height) > maxEvalDim;
+  const evalSource = downscaled ? downscaleImageData(segSource, maxEvalDim) : segSource;
+  const evalReference = downscaled ? downscaleImageData(referenceImageData, maxEvalDim) : referenceImageData;
+  const evalScale = downscaled ? evalSource.width / segSource.width : 1;
+  const evalC = (c) => (downscaled ? { ...c, regionSize: clamp(Math.round(c.regionSize * evalScale), 6, 42) } : c);
+  const evalTrace = async (candidate) => {
+    const traced = traceRegionCandidate(evalSource, pipelineOptions, evalC(candidate));
     let difference = null;
-    try {
-      difference = await measureSvgDifference(referenceImageData, traced.svg, guardOptions);
-    } catch (error) {
-      difference = { error: error.message };
-    }
-    results.push({
-      candidate,
-      traced,
-      difference,
-      paths: traced.pathCount
-    });
-    await nextFrame();
-  }
+    try { difference = await measureSvgDifference(evalReference, traced.svg, guardOptions); }
+    catch (error) { difference = { error: error.message }; }
+    return { candidate, traced, difference, paths: traced.pathCount };
+  };
+
+  const candidates = regionEngineCandidates(segSource, pipelineOptions);
+  const results = [];
+  for (const candidate of candidates) { results.push(await evalTrace(candidate)); await nextFrame(); }
 
   const base = results[0];
   let best = base;
@@ -4784,14 +4807,7 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
       if (evaluated.size >= maxEvals) break;
       const k = keyOf(nb);
       if (evaluated.has(k)) continue;
-      const traced = traceRegionCandidate(segSource, pipelineOptions, nb);
-      let difference = null;
-      try {
-        difference = await measureSvgDifference(referenceImageData, traced.svg, guardOptions);
-      } catch (error) {
-        difference = { error: error.message };
-      }
-      const result = { candidate: nb, traced, difference, paths: traced.pathCount };
+      const result = await evalTrace(nb);
       evaluated.set(k, result);
       results.push(result);
       if (regionCandidateBeatsCurrent(result, best, base, optimizer)) { best = result; improved = true; }
@@ -4804,17 +4820,17 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
   const refinementInfo = { applied: false, attempted: false, splitRegions: 0 };
   try {
     const s = best.candidate;
-    const slicR = computeSlicSuperpixels(segSource, { regionSize: s.regionSize, compactness: s.compactness, iterations: s.iterations });
-    const regionsR = mergeSuperpixels(slicR, segSource, { mergeThreshold: s.mergeThreshold });
-    const refined = refineRegions(regionsR, segSource, pipelineOptions);
+    const slicR = computeSlicSuperpixels(evalSource, { regionSize: evalC(s).regionSize, compactness: s.compactness, iterations: s.iterations });
+    const regionsR = mergeSuperpixels(slicR, evalSource, { mergeThreshold: s.mergeThreshold });
+    const refined = refineRegions(regionsR, evalSource, pipelineOptions);
     if (refined) {
       refinementInfo.attempted = true;
       refinementInfo.splitRegions = refined.splitCount;
-      const refinedTraced = traceRegionsToSvg(refined, pipelineOptions, segSource);
+      const refinedTraced = traceRegionsToSvg(refined, pipelineOptions, evalSource);
       refinedTraced.pathCount = countSvgElements(refinedTraced.svg, "path");
       let diff = null;
-      try { diff = await measureSvgDifference(referenceImageData, refinedTraced.svg, guardOptions); } catch (error) { diff = { error: error.message }; }
-      const refResult = { candidate: { name: "region-split", label: `Per-region split (${refined.splitCount})` }, traced: refinedTraced, difference: diff, paths: refinedTraced.pathCount };
+      try { diff = await measureSvgDifference(evalReference, refinedTraced.svg, guardOptions); } catch (error) { diff = { error: error.message }; }
+      const refResult = { candidate: { name: "region-split", label: `Per-region split (${refined.splitCount})`, regionSize: s.regionSize, mergeThreshold: s.mergeThreshold, compactness: s.compactness, iterations: s.iterations, split: true }, traced: refinedTraced, difference: diff, paths: refinedTraced.pathCount };
       results.push(refResult);
       refinementInfo.refinedPaths = refResult.paths;
       refinementInfo.refinedEdgeRmse = diff && !diff.error ? diff.edgeWeightedRmse : null;
@@ -4827,13 +4843,15 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
   }
 
   const selected = best.candidate.name !== "base";
-  best.traced.regionOptimization = {
+  const stats = {
     refinement: refinementInfo,
     enabled: optimizer.enabled,
     selected,
     guardReason: selected ? "difference guard selected better region candidate" : "difference guard kept base region candidate",
     candidatesTested: results.length,
     localSearchRounds: localRounds,
+    evalDownscaled: downscaled,
+    evalDims: downscaled ? `${evalSource.width}x${evalSource.height}` : "full",
     selectedCandidate: best.candidate.name,
     selectedLabel: best.candidate.label,
     baselineEdgeRmse: base.difference?.edgeWeightedRmse,
@@ -4862,7 +4880,53 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
       error: result.difference?.error
     }))
   };
-  return best.traced;
+
+  if (!downscaled) {
+    best.traced.regionOptimization = stats;
+    return best.traced;
+  }
+
+  // Coarse-to-fine: 400px ranking doesn't perfectly predict full-res quality, so promote the
+  // top eval candidates (plus base) to FULL resolution and make the final decision there. The
+  // full-res base is the floor, so this can only improve on base, never regress it.
+  const fullTraceOf = async (cand) => {
+    const slicF = computeSlicSuperpixels(segSource, { regionSize: cand.regionSize, compactness: cand.compactness, iterations: cand.iterations });
+    let regF = mergeSuperpixels(slicF, segSource, { mergeThreshold: cand.mergeThreshold });
+    if (cand.split) { const rf = refineRegions(regF, segSource, pipelineOptions); if (rf) regF = rf; }
+    const tr = traceRegionsToSvg(regF, pipelineOptions, segSource);
+    tr.pathCount = countSvgElements(tr.svg, "path");
+    let diff = null;
+    try { diff = await measureSvgDifference(referenceImageData, tr.svg, guardOptions); } catch (error) { diff = { error: error.message }; }
+    return { candidate: cand, traced: tr, difference: diff, paths: tr.pathCount };
+  };
+  const validEval = results.filter((r) => r.difference && !r.difference.error);
+  validEval.sort((a, b) => a.difference.edgeWeightedRmse - b.difference.edgeWeightedRmse);
+  const promote = [];
+  const seenP = new Set();
+  const addP = (cand) => {
+    const k = `${cand.regionSize}|${cand.mergeThreshold}|${cand.compactness}|${cand.iterations}|${cand.split ? "s" : ""}`;
+    if (seenP.has(k)) return;
+    seenP.add(k);
+    promote.push(cand);
+  };
+  addP(base.candidate);
+  for (const r of validEval) { if (promote.length >= 6) break; addP(r.candidate); }
+
+  const fullResults = [];
+  for (const cand of promote) { fullResults.push(await fullTraceOf(cand)); await nextFrame(); }
+  const fullBase = fullResults[0];
+  let fullBest = fullBase;
+  for (const r of fullResults.slice(1)) {
+    const beats = r.candidate.split ? refinementBeatsCurrent(r, fullBest, fullBase) : regionCandidateBeatsCurrent(r, fullBest, fullBase, optimizer);
+    if (beats) fullBest = r;
+  }
+  stats.fullResPromoted = promote.length;
+  stats.fullResSelectedCandidate = fullBest.candidate.name;
+  stats.fullResBaseEdgeRmse = fullBase.difference?.edgeWeightedRmse;
+  stats.fullResSelectedEdgeRmse = fullBest.difference?.edgeWeightedRmse;
+  stats.fullResSelectedPaths = fullBest.paths;
+  fullBest.traced.regionOptimization = stats;
+  return fullBest.traced;
 }
 
 function runBackgroundDetach(imageData, options = {}) {

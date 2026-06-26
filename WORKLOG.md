@@ -84,9 +84,14 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
      split via 2-means Lab color into sub-regions, re-traced, kept only if edge clearly improves
      (looser path guard). Verified do-no-harm; on shaded the split was worse (radial already wins)
      so guard rejected; on the logo the optimizer (local search) won 7.65->6.94 edge, fewer paths.
-   - NEXT (runtime, important): optimizer evaluates candidates at FULL res -> 27s on a 1024px
-     logo. Fix = DOWNSCALE-EVAL: explore candidates on a ~400px copy (scale regionSize by the
-     downscale factor), pick winning settings, do ONE full-res final trace. Should cut to <8s.
+   - DOWNSCALE-EVAL / COARSE-TO-FINE (2026-06-26 [claude]): DONE in code. Explore candidates on
+     a 400px copy (regionSize scaled by downscale factor), then PROMOTE the top eval candidates
+     (+base) to FULL res and decide there (full-res base is the floor -> can't regress).
+     Result: 27s -> ~2-3s. BUT 400px ranking is imperfect: on the logo it did NOT surface the
+     full-res winner, so it reverted to base (lost the marginal 7.65->6.94 win); do-no-harm held.
+     Bumped promote 4->6 to try to recover the win (NOT yet browser-verified — see handoff).
+   - OPEN for Codex: verify promote=6 recovers the logo win at acceptable speed; if not, options =
+     raise maxEvalDim (e.g. 560), or seed a tiny FULL-res local search around the eval winner.
 5. Real gradient/diffusion-curve modeling for glows/shadows (soft-effect layer is flat blur today).
 6. Image-type classifier to auto-select pipeline (photo vs blended artwork vs flat).
 
@@ -94,6 +99,22 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
 
 ## Change Log  (newest first)
+- 2026-06-26 [claude] DOWNSCALE-EVAL + COARSE-TO-FINE optimizer speedup (handoff to Codex).
+  `optimizeRegionTrace`: NEW `downscaleImageData`; candidates now explored on a 400px copy via
+  `evalSource`/`evalReference`/`evalC` (regionSize scaled by downscale factor) + `evalTrace`;
+  then the top eval candidates (+base) are PROMOTED to full res and the winner is chosen there
+  (`fullTraceOf`, full-res guard = do-no-harm floor). `regionOptimization` gains evalDownscaled/
+  evalDims/fullRes* stats. Cache `?v=20260626-downscale1`. Snapshot app.js.bak-0626e-claude-downscale.
+  VERIFIED IN PREVIEW (promote=4):
+    shaded 512px: 9s -> ~2s, edge 4.09 -> 4.08 (do-no-harm), full-res viewBox 512.
+    logo 1024px : 27s -> ~3s, edge 7.65 (= base; the 6.94 win was NOT recovered — 400px ranking
+                  missed the full-res winner). Do-no-harm held; output is full-res (viewBox 1024).
+  THEN changed promote 4 -> 6 to try to recover the logo win — node --check OK but NOT browser-
+  verified (user asked to save for Codex before I finished the re-test).
+  NOT committed-as-deployed: live Cloud Run is still microcand1 (rev 00007). NOT deployed this build.
+  CODEX TODO: (1) reload preview, trace logo, confirm promote=6 effect + runtime; (2) if win still
+  not recovered, raise maxEvalDim (~560) or add a small full-res local search around the eval winner;
+  (3) deploy when satisfied.
 - 2026-06-26 [claude] #5 PER-REGION MICRO-CANDIDATES (split) added to `optimizeRegionTrace`.
   NEW `computeRegionStats`, `splitRegionInPlace` (2-means Lab split of one region),
   `refineRegions` (find high-residual regions via fitRegionAdaptive, split top-N, rebuild),
