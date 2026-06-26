@@ -4456,8 +4456,11 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
     const y0 = Math.max(0, bb.minY - 1);
     const x1 = Math.min(width - 1, bb.maxX + 1);
     const y1 = Math.min(height - 1, bb.maxY + 1);
-    const fw = x1 - x0 + 2;
-    const fh = y1 - y0 + 2;
+    // +1 offset each side so the field ALWAYS has a 0-ring, even when the region touches the
+    // image border (e.g. a perimeter frame). Without it the contour can't close at the edge and
+    // the even-odd fill floods the interior. (Fix 2026-06-26 [claude]: KOINO logo white-flood bug.)
+    const fw = x1 - x0 + 3;
+    const fh = y1 - y0 + 3;
     const field = new Float32Array(fw * fh);
     const src = sourceImageData ? sourceImageData.data : null;
     const cr = regionColor[r];
@@ -4465,7 +4468,7 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
       for (let x = x0; x <= x1; x += 1) {
         const i = y * width + x;
         const own = regionLabels[i];
-        const fi = (y - y0) * fw + (x - x0);
+        const fi = (y - y0 + 1) * fw + (x - x0 + 1);
         if (!src) {
           if (own === r) field[fi] = 1;
           continue;
@@ -4494,7 +4497,7 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
     const subpaths = [];
     for (const loop of linked.loops) {
       if (Math.abs(polygonArea(loop.points)) < fit.minArea) continue;
-      const pts = loop.points.map((p) => [p[0] + x0, p[1] + y0]);
+      const pts = loop.points.map((p) => [p[0] + x0 - 1, p[1] + y0 - 1]);
       const d = loopToSmoothSubpath(pts, fit);
       if (d) subpaths.push(d);
     }

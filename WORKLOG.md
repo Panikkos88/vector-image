@@ -99,6 +99,26 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
 
 ## Change Log  (newest first)
+- 2026-06-26 [claude] CRITICAL BUG FIXED: border-touching region flood-fill (found via the real
+  KOINO/boc logo). `traceRegionsToSvg` built the per-region marching-squares field WITHOUT a
+  guaranteed 0-ring on the image-edge sides (x0/y0 clamped to 0). A region touching the image
+  border (this logo has a light PERIMETER FRAME touching all 4 edges) couldn't close its contour,
+  so the even-odd fill FLOODED the interior with that region's color (white over teal).
+  Symptom: KOINO logo MAE 30% / edge 44% / hot 46% with correct colors. Earlier tests (shaded,
+  NS-CAR) had no full border frame so it never surfaced.
+  FIX: field offset +1 each side (fw/fh +3, fi uses +1, loop points map p+x0-1/p+y0-1) -> full
+  0-ring always. Added app/assets/boc-logo-small.png test asset. Cache `?v=20260626-borderfix1`.
+  node --check OK. VERIFIED (manual internals, regionSize 9, 137 regions):
+    KOINO logo: 43.87 -> 11.0 edge, 30.07 -> 0.96 MAE, 45.6 -> 2.5 hot, 87 paths.
+                (vs the ORIGINAL ImageTracer on this logo: 18.5% edge / 5359 paths -> we now
+                 beat it on edge at ~60x fewer paths.)
+    Shaded app trace: 4.08 -> 4.05 edge, 10 paths = NO REGRESSION (do-no-harm for interior).
+  STILL OPEN for the KOINO logo (Codex): (1) app default is MEDIUM (regionSize ~27) which is too
+  coarse for this fine wreath/text — needs higher region density / content-adaptive detail;
+  (2) the downscale-eval optimizer MISPREDICTS badly on fine detail (400px eval said 19.66% edge
+  but full-res was 43.9% pre-fix) -> reconsider downscale-eval for high-edge-density images
+  (raise maxEvalDim, or skip downscaling when detail is high). App end-to-end on this logo at
+  Medium will still be mediocre until (1)/(2) are addressed; the FIX makes it correct, not yet great.
 - 2026-06-26 [claude] DOWNSCALE-EVAL + COARSE-TO-FINE optimizer speedup (handoff to Codex).
   `optimizeRegionTrace`: NEW `downscaleImageData`; candidates now explored on a 400px copy via
   `evalSource`/`evalReference`/`evalC` (regionSize scaled by downscale factor) + `evalTrace`;
