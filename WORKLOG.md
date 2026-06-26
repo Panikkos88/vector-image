@@ -47,6 +47,7 @@ Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-wes
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
+GitHub remote `origin` points to https://github.com/Panikkos88/vector-image.git.
 
 Quality is near the ceiling of the current "quantize → trace regions → patch" architecture.
 Recent post-passes (sub-pixel nudge, background detach v1/v2, micro-prune) are mostly
@@ -82,6 +83,12 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
 
 ## Change Log  (newest first)
+- 2026-06-26 [codex] Connected local Git repo to GitHub.
+  Files touched: `README.md` (merge conflict resolution), `WORKLOG.md`; Git remote `origin`
+  added as `https://github.com/Panikkos88/vector-image.git`.
+  Remote had one GitHub placeholder `README.md` commit (`c5911ae`), so local `main` merged
+  `origin/main` with `--allow-unrelated-histories` and kept the project README content.
+  Benchmark result: not rerun; Git/GitHub connection only.
 - 2026-06-26 [codex] Git repository initialized.
   Files touched: `.gitignore`, `.gitattributes`, `WORKLOG.md`; repository metadata created under `.git/`.
   Added ignore rules for `node_modules/`, local backup snapshots (`*.bak-*`), logs, local
