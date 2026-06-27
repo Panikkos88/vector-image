@@ -4217,12 +4217,62 @@ function turnAngleDeviation(a, b, c) {
   return Math.abs(Math.atan2(cross, dot));
 }
 
+function loopGeometryStats(points) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let perimeter = 0;
+  const n = points.length;
+  for (let i = 0; i < n; i += 1) {
+    const p = points[i];
+    const next = points[(i + 1) % n];
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+    const dx = next[0] - p[0];
+    const dy = next[1] - p[1];
+    perimeter += Math.hypot(dx, dy);
+  }
+  const width = Math.max(0, maxX - minX);
+  const height = Math.max(0, maxY - minY);
+  const area = Math.abs(polygonArea(points));
+  const compactness = area > 0 ? (perimeter * perimeter) / (4 * Math.PI * area) : Infinity;
+  return { width, height, span: Math.max(width, height), minSpan: Math.min(width, height), area, perimeter, compactness };
+}
+
+function adaptiveLoopSimplifyTolerance(points, options) {
+  const baseTolerance = Math.max(0, options.simplifyTolerance || 0);
+  if (!options.adaptiveSimplify || points.length < 4 || baseTolerance <= 0) return baseTolerance;
+  const stats = loopGeometryStats(points);
+  const detailTolerance = Math.max(0, Number.isFinite(options.detailSimplifyTolerance)
+    ? options.detailSimplifyTolerance
+    : baseTolerance * 0.7);
+  const largeTolerance = Math.max(baseTolerance, Number.isFinite(options.largeSimplifyTolerance)
+    ? options.largeSimplifyTolerance
+    : baseTolerance);
+  const detailArea = Number.isFinite(options.detailSimplifyArea) ? options.detailSimplifyArea : 900;
+  const detailSpan = Number.isFinite(options.detailSimplifySpan) ? options.detailSimplifySpan : 72;
+  const thinSpan = Number.isFinite(options.detailThinSpan) ? options.detailThinSpan : 10;
+  const complexRatio = Number.isFinite(options.detailComplexityRatio) ? options.detailComplexityRatio : 5.5;
+  const largeSpan = Number.isFinite(options.largeSimplifySpan) ? options.largeSimplifySpan : 220;
+  const detailLoop =
+    stats.area <= detailArea ||
+    stats.span <= detailSpan ||
+    stats.minSpan <= thinSpan ||
+    stats.compactness >= complexRatio;
+  if (detailLoop) return Math.min(baseTolerance, detailTolerance);
+  if (stats.span >= largeSpan && stats.compactness < 2.8) return largeTolerance;
+  return baseTolerance;
+}
+
 // Fit a closed loop of points to a smooth cubic-Bezier subpath. Smooth spans use a
 // Catmull-Rom -> Bezier conversion; detected corners (sharp turn) stay as line joins.
 function loopToSmoothSubpath(points, options) {
   let pts = points.slice();
   if (pts.length > 1 && samePoint(pts[0], pts[pts.length - 1])) pts.pop();
-  pts = simplifyClosedLoop(pts, options.simplifyTolerance);
+  pts = simplifyClosedLoop(pts, adaptiveLoopSimplifyTolerance(pts, options));
   const n = pts.length;
   if (n < 3) return null;
   const corner = pts.map((p, i) => turnAngleDeviation(pts[(i - 1 + n) % n], p, pts[(i + 1) % n]) > options.cornerAngle);
@@ -5304,8 +5354,71 @@ function paletteBoundaryCandidates(options = {}) {
     { name: "centered-iso55", label: "Pixel-center iso 0.55", variant: { name: "centered-iso55", coordinateOffset: 0.5, simplifyTolerance: fineTolerance, iso: 0.55 } },
     { name: "tight-corners", label: "Tighter corners", variant: { name: "tight-corners", coordinateOffset: 0.5, simplifyTolerance: fineTolerance, cornerAngle: 0.75 } },
     { name: "tight-corners-s12", label: "Tighter corners simplify 0.12", variant: { name: "tight-corners-s12", coordinateOffset: 0.5, simplifyTolerance: 0.12, cornerAngle: 0.75 } },
+    { name: "tight-corners-s12-c065", label: "Tighter corners simplify 0.12 / corner 0.65", variant: { name: "tight-corners-s12-c065", coordinateOffset: 0.5, simplifyTolerance: 0.12, cornerAngle: 0.65 } },
     { name: "tight-corners-s15", label: "Tighter corners simplify 0.15", variant: { name: "tight-corners-s15", coordinateOffset: 0.5, simplifyTolerance: 0.15, cornerAngle: 0.75 } },
+    { name: "tight-corners-s15-c065", label: "Tighter corners simplify 0.15 / corner 0.65", variant: { name: "tight-corners-s15-c065", coordinateOffset: 0.5, simplifyTolerance: 0.15, cornerAngle: 0.65 } },
+    { name: "tight-corners-s16-c065", label: "Tighter corners simplify 0.16 / corner 0.65", variant: { name: "tight-corners-s16-c065", coordinateOffset: 0.5, simplifyTolerance: 0.16, cornerAngle: 0.65 } },
+    { name: "tight-corners-s17-c065", label: "Tighter corners simplify 0.17 / corner 0.65", variant: { name: "tight-corners-s17-c065", coordinateOffset: 0.5, simplifyTolerance: 0.17, cornerAngle: 0.65 } },
     { name: "tight-corners-s18", label: "Tighter corners simplify 0.18", variant: { name: "tight-corners-s18", coordinateOffset: 0.5, simplifyTolerance: 0.18, cornerAngle: 0.75 } },
+    { name: "tight-corners-s18-c065", label: "Tighter corners simplify 0.18 / corner 0.65", variant: { name: "tight-corners-s18-c065", coordinateOffset: 0.5, simplifyTolerance: 0.18, cornerAngle: 0.65 } },
+    { name: "tight-corners-s18-c060", label: "Tighter corners simplify 0.18 / corner 0.60", variant: { name: "tight-corners-s18-c060", coordinateOffset: 0.5, simplifyTolerance: 0.18, cornerAngle: 0.60 } },
+    { name: "tight-corners-s18-c055", label: "Tighter corners simplify 0.18 / corner 0.55", variant: { name: "tight-corners-s18-c055", coordinateOffset: 0.5, simplifyTolerance: 0.18, cornerAngle: 0.55 } },
+    { name: "tight-corners-s18-c050", label: "Tighter corners simplify 0.18 / corner 0.50", variant: { name: "tight-corners-s18-c050", coordinateOffset: 0.5, simplifyTolerance: 0.18, cornerAngle: 0.50 } },
+    {
+      name: "tight-corners-adaptive-s12s18",
+      label: "Adaptive detail simplify 0.12/0.18",
+      variant: {
+        name: "tight-corners-adaptive-s12s18",
+        coordinateOffset: 0.5,
+        simplifyTolerance: 0.18,
+        cornerAngle: 0.75,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.12,
+        largeSimplifyTolerance: 0.21
+      }
+    },
+    {
+      name: "tight-corners-adaptive-s10s18",
+      label: "Adaptive detail simplify 0.10/0.18",
+      variant: {
+        name: "tight-corners-adaptive-s10s18",
+        coordinateOffset: 0.5,
+        simplifyTolerance: 0.18,
+        cornerAngle: 0.75,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.10,
+        largeSimplifyTolerance: 0.21
+      }
+    },
+    {
+      name: "tight-corners-adaptive-c065",
+      label: "Adaptive detail simplify / corner 0.65",
+      variant: {
+        name: "tight-corners-adaptive-c065",
+        coordinateOffset: 0.5,
+        simplifyTolerance: 0.18,
+        cornerAngle: 0.65,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.12,
+        largeSimplifyTolerance: 0.21
+      }
+    },
+    {
+      name: "tight-corners-adaptive-wide-c065",
+      label: "Adaptive wide detail simplify / corner 0.65",
+      variant: {
+        name: "tight-corners-adaptive-wide-c065",
+        coordinateOffset: 0.5,
+        simplifyTolerance: 0.18,
+        cornerAngle: 0.65,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.12,
+        largeSimplifyTolerance: 0.21,
+        detailSimplifySpan: 140,
+        detailThinSpan: 18,
+        detailComplexityRatio: 3.4
+      }
+    },
     { name: "tight-corners-s20", label: "Tighter corners simplify 0.20", variant: { name: "tight-corners-s20", coordinateOffset: 0.5, simplifyTolerance: 0.20, cornerAngle: 0.75 } },
     { name: "tight-corners-s21", label: "Tighter corners simplify 0.21", variant: { name: "tight-corners-s21", coordinateOffset: 0.5, simplifyTolerance: 0.21, cornerAngle: 0.75 } },
     { name: "tight-corners-s22", label: "Tighter corners simplify 0.22", variant: { name: "tight-corners-s22", coordinateOffset: 0.5, simplifyTolerance: 0.22, cornerAngle: 0.75 } },
@@ -5365,7 +5478,7 @@ async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptio
     minMeanImprovement: 0.00003,
     strongEdgeThreshold: 0.035,
     strongEdgeImprovement: 0.03,
-    nodePreferenceEdgeBand: 0.003,
+    nodePreferenceEdgeBand: 0.0018,
     nodePreferenceHotSlack: 0.001,
     hotPixelSlack: 0.001,
     contaminationSlack: 0.001,

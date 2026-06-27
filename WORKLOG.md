@@ -91,7 +91,7 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00009-k8j`, serving 100% traffic.
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00010-8lz`, serving 100% traffic.
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -116,12 +116,17 @@ pixels while choosing the Palette ladder, so BOC auto-picks k=3 without `?palett
 Browser benchmark on `?engine=palette` selects k=3, `tight-corners-s18`: edge RMSE 2.60%,
 MAE 0.27%, hot 0.7%, 55 paths, nodes 15,835, runtime ~3.9s. Superseded below by the
 deployed Auto-router v1, which makes this route the default for flat logos.
-2026-06-27 [codex]: Auto-router v1 is now the default and is deployed to Cloud Run
+2026-06-27 [codex]: Auto-router v1 is now the default and was initially deployed to Cloud Run
 revision `vector-accuracy-studio-00009-k8j`. Default/no-query BOC chooses Palette/k=3 and
 matches the prior best local result: edge RMSE 2.60%, MAE 0.27%, hot 0.7%, 55 paths,
 15,835 nodes, runtime ~4s. Default/no-query shaded test chooses Region because the palette
 guard rejects k=14/core residual 15.6. This answers the user requirement: the user no
 longer picks an engine manually.
+2026-06-27 [codex]: BOC compact-boundary pass reached the measured Vector Magic edge bar.
+Default/no-query BOC still routes to Palette/k=3, but the optimizer now selects
+`tight-corners-s18-c050`: edge RMSE 2.41%, MAE 0.26%, hot 0.7%, 55 paths, 13,269 nodes,
+SVG ~162 KB, runtime ~6.6-6.9s local/cloud. This matches VM's known 2.41% edge / 55-path
+reference while reducing nodes vs the previous 15,835-node `tight-corners-s18`.
 
 Quality is near the ceiling of the current "quantize → trace regions → patch" architecture.
 Recent post-passes (sub-pixel nudge, background detach v1/v2, micro-prune) are mostly
@@ -168,10 +173,10 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
    for shaded/gradient content. Next routing work should expand the labeled test set beyond
    BOC + shaded-test + NS CAR before changing thresholds.
 
-Current BOC target: close the remaining Vector Magic gap from local/cloud 2.60% edge RMSE
-to the measured VM reference of about 2.41% without growing complexity beyond the current
-55 paths / ~15.8k node estimate. Likely levers: smarter compact-candidate selection around
-`tight-corners-s12..s18`, corner-preserving simplification, and final visual edge QA.
+Current BOC status: edge RMSE now matches the measured VM reference at about 2.41% with
+the same 55 paths and fewer nodes than the prior local/cloud build. Remaining VM gaps are
+MAE/hot pixels (ours 0.26% / 0.7% vs VM about 0.17% / 0.5%) and visual QA across more
+flat-logo samples before changing router thresholds.
 
 **Recommended first build:** prototype items 1+3 as a NEW experimental engine alongside
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
@@ -257,6 +262,10 @@ residual for k selection while still recording full residual. BOC no longer need
 final `tight-corners-s18` output at 2.60% edge / 0.27% MAE / 0.7% hot / 55 paths / 15,835 nodes.
 UPDATE 2026-06-27 [codex]: Auto-router v1 is implemented and deployed. Default/no-query BOC
 routes to Palette/k=3; default/no-query shaded routes to Region because the palette guard fails.
+UPDATE 2026-06-27 [codex]: Compact-boundary v2 reached the BOC VM edge bar without complexity
+growth. It adds sharper corner-angle candidates around `tight-corners-s12..s18`, narrows the
+compact-selection edge band, and selects `tight-corners-s18-c050`: 2.41% edge / 0.26% MAE /
+0.7% hot / 55 paths / 13,269 nodes.
 
 ## PALETTE ENGINE SPEC (next major build) — 2026-06-26 [claude]  *** START HERE ***
 GOAL: close the VM gap on FLAT logos (BOC 12.6% -> ~3% edge; NS CAR 7.5% -> ~3%) by building a
@@ -352,6 +361,56 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-27 [codex] BOC compact-boundary v2 reached VM edge bar.
+  Snapshot before edit: `app/app.js.bak-0627-codex-boc-compact2` and
+  `app/index.html.bak-0627-codex-boc-compact2`.
+  Files/functions touched:
+    - `app/app.js`: added `loopGeometryStats` and `adaptiveLoopSimplifyTolerance`; updated
+      `loopToSmoothSubpath` to use adaptive tolerance only when a candidate opts in.
+    - `app/app.js`: expanded `paletteBoundaryCandidates` with sharper corner-angle sweeps
+      around `tight-corners-s12..s18`, adaptive detail candidates, and final
+      `tight-corners-s18-c050`.
+    - `app/app.js`: tightened `optimizePaletteTrace` `nodePreferenceEdgeBand` from 0.003 to
+      0.0018 so compact selection cannot choose a much worse edge candidate only because it
+      has fewer nodes.
+    - `app/index.html`: cache-busted app.js to `?v=20260627-boc-compact2`.
+    - `WORKLOG.md`, `SKILL.md`: updated current state, next target, and this handoff.
+  Local:
+    - `npm run check` OK.
+    - Browser at `http://localhost:8787/?run=boc-compact2-local-sweep3`, Load BOC Test, Trace:
+      Auto router selected Palette/k=3. Boundary optimizer selected `tight-corners-s18-c050`
+      after 36 candidates; best raw edge candidate was `tight-corners-s12-c065` at 2.33% edge /
+      19,982 nodes, but compact selection chose 2.41% edge / 13,269 nodes. Final output:
+      MAE 0.26%, edge RMSE 2.41%, hot 0.7%, 55 paths, SVG ~162,826 bytes, runtime 6,626 ms,
+      Download SVG enabled.
+    - Local shaded regression: Auto router selected Region, MAE 1.09%, edge RMSE 4.05%,
+      hot 2.7%, 10 paths, runtime 2,804 ms, Download SVG enabled.
+    - Local NS CAR/sample regression: Auto router selected Region, MAE 1.25%, edge RMSE 6.94%,
+      hot 3.7%, 30 paths, runtime 4,717 ms, Download SVG enabled.
+  VM:
+    - Current known Vector Magic BOC reference remains about MAE 0.17%, edge RMSE 2.41%,
+      hot 0.5%, 55 paths. Our default local/cloud BOC is now about MAE 0.26%, edge RMSE
+      2.41%, hot 0.7%, 55 paths, so the edge gap is effectively closed while MAE/hot pixels
+      still trail VM.
+  Cloud:
+    - Deployed with `gcloud run deploy vector-accuracy-studio --source . --project true-image-to-vector
+      --region europe-west1 --port 8080 --allow-unauthenticated`.
+    - Cloud Run revision `vector-accuracy-studio-00010-8lz` serves 100% traffic.
+    - Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
+    - Cache tag verified in deployed HTML: `app.js?v=20260627-boc-compact2`.
+    - Cloud BOC result: Palette/k=3, selected `tight-corners-s18-c050`, MAE 0.26%,
+      edge RMSE 2.41%, hot 0.7%, 55 paths, 13,269 nodes, SVG ~162,826 bytes, runtime 6,916 ms,
+      Download SVG enabled.
+    - Cloud shaded regression: Region engine, MAE 1.09%, edge RMSE 4.05%, hot 2.7%,
+      10 paths, runtime 2,714 ms.
+    - Cloud NS CAR/sample regression: Region engine, MAE 1.25%, edge RMSE 6.94%,
+      hot 3.7%, 30 paths, runtime 4,409 ms.
+  Decision:
+    - Accepted. BOC now matches VM's measured edge RMSE at the same 55-path structure and
+      lower node count than the previous auto-router build (13,269 vs 15,835). Do not keep
+      chasing BOC edge blindly; next quality work should target BOC MAE/hot pixels and a
+      broader flat-logo benchmark set.
+
 - 2026-06-27 [codex] Auto-router v1 deployed and proof-loop tested.
   Snapshot before edit: `app/app.js.bak-0627-codex-router1` and
   `app/index.html.bak-0627-codex-router1`.
