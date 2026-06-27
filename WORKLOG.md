@@ -91,7 +91,7 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00010-8lz`, serving 100% traffic.
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00011-lbr`, serving 100% traffic.
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -99,6 +99,11 @@ GitHub remote `origin` points to https://github.com/Panikkos88/vector-image.git.
 UI is now focused on the active engine only: Auto router, Medium detail, Smooth
 anti-aliasing, and the active metric-guarded optimizer. Older engine/debug selectors are
 hidden to avoid confusion while routing is automatic.
+Benchmark Pack v1 is now available. Generated, license-safe PNGs live under
+`app/assets/benchmarks/`; hidden test loading uses `?asset=assets/benchmarks/<file>.png`;
+Vector Magic fill-only SVG references live under `research/vm-benchmarks/`; raw measured
+results live in `research/benchmark-results-2026-06-27.json`; summary is in
+`research/benchmark-pack-v1.md`.
 
 2026-06-27 [codex]: BOC/KOINO precision pass added an internal Palette boundary optimizer
 behind the hidden dev route `?engine=palette&paletteK=3`. It tests coordinate convention,
@@ -172,11 +177,20 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
 6. DONE (2026-06-27 [codex]) Auto-router v1 selects Palette for flat BOC/KOINO and Region
    for shaded/gradient content. Next routing work should expand the labeled test set beyond
    BOC + shaded-test + NS CAR before changing thresholds.
+7. DONE (2026-06-27 [codex]) Benchmark Pack v1 added and VM-referenced. It shows:
+   flat badge is close (ours 2.77% edge vs VM 2.51%), fine text trails badly
+   (4.62% vs 2.26%), glow/shadow color modeling is weak (ours 2.04% MAE vs VM 0.09%),
+   and current Region routing is much worse than VM on outline/metal samples
+   (outline 13.03% edge vs VM 1.90%; metal 9.11% vs VM 1.79%).
 
 Current BOC status: edge RMSE now matches the measured VM reference at about 2.41% with
 the same 55 paths and fewer nodes than the prior local/cloud build. Remaining VM gaps are
 MAE/hot pixels (ours 0.26% / 0.7% vs VM about 0.17% / 0.5%) and visual QA across more
 flat-logo samples before changing router thresholds.
+
+Current next target: do not tune BOC edge further first. Use Benchmark Pack v1. Start with
+fine-text Palette structure/path reduction, then glow/shadow color modeling, then router
+threshold changes for outline logos that currently get sent to Region.
 
 **Recommended first build:** prototype items 1+3 as a NEW experimental engine alongside
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
@@ -361,6 +375,53 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-27 [codex] Benchmark Pack v1 added, VM-referenced, deployed, and proof-loop tested.
+  Snapshot before edit: `app/app.js.bak-0627-codex-benchmark1` and
+  `app/index.html.bak-0627-codex-benchmark1`.
+  Files/functions touched:
+    - `app/app.js`: added `loadQueryAsset`; invoked it after app initialization so controlled
+      test images can be loaded with hidden `?asset=assets/benchmarks/<file>.png` URLs.
+    - `app/index.html`: cache-busted app.js to `?v=20260627-benchmark1`.
+    - `tools/make-benchmark-logos.js`: new dependency-free generator for six synthetic,
+      license-safe benchmark PNGs plus `manifest.json`.
+    - `app/assets/benchmarks/*`: generated benchmark inputs.
+    - `research/vm-benchmarks/*-vm.svg`: Vector Magic fill-only references captured through
+      the user's logged-in Chrome session using generated samples only.
+    - `research/benchmark-results-2026-06-27.json`: raw local/cloud/VM metric results.
+    - `research/benchmark-pack-v1.md`: human-readable findings and next targets.
+    - `WORKLOG.md`, `SKILL.md`: updated current state, next steps, and this handoff.
+  Local:
+    - `npm run check` OK.
+    - Browser local batch at `http://localhost:8787/?asset=...`: all six generated samples
+      loaded/traced through the normal UI path.
+    - Local results: flat badge Palette 2.77% edge / 0.21% MAE / 0.5% hot / 31 paths;
+      fine text Palette 4.62% / 0.16% / 0.6% / 179 paths; dark glow Palette 3.86% /
+      2.04% / 0.3% / 65 paths; transparent mark Palette 3.12% / 0.13% / 0.4% / 26 paths;
+      outline shield Region 13.03% / 1.31% / 2.8% / 26 paths; metal gradient Region
+      9.11% / 1.22% / 4.2% / 13 paths.
+  VM:
+    - Uploaded all six generated benchmark PNGs to Vector Magic via the user's logged-in
+      Chrome session and saved fill-only SVG references under `research/vm-benchmarks/`.
+    - VM measured with the app's `measureSvgDifference`: flat badge 2.51% edge / 0.10% MAE /
+      0.44% hot / 28 paths; fine text 2.26% / 0.11% / 0.43% / 61 paths; dark glow
+      1.04% / 0.09% / 0.09% / 66 paths; outline shield 1.90% / 0.07% / 0.30% / 30 paths;
+      metal gradient 1.79% / 0.63% / 0.45% / 88 paths.
+    - Transparent VM fill-only SVG does not preserve the same transparent-background metric
+      semantics, so it is saved but not accepted as an apples-to-apples score yet.
+  Cloud:
+    - Deployed with `gcloud run deploy vector-accuracy-studio --source . --project true-image-to-vector
+      --region europe-west1 --port 8080 --allow-unauthenticated`.
+    - Cloud Run revision `vector-accuracy-studio-00011-lbr` serves 100% traffic.
+    - Cache tag verified in deployed HTML: `app.js?v=20260627-benchmark1`.
+    - Cloud batch matched local on all six generated samples. Export smoke passed: SVG
+      preview rendered, Download SVG was enabled, and `bench-metal-gradient-local-trace.svg`
+      appeared in Downloads.
+  Decision:
+    - Accepted as benchmark infrastructure, not an engine-quality improvement. The automatic
+      router split is broadly sane, but the pack exposes new targets: fine-text Palette
+      simplification, glow/shadow color modeling, and router/Region behavior on outline and
+      metallic logos. Future engine changes must include this pack when relevant.
+
 - 2026-06-27 [codex] BOC compact-boundary v2 reached VM edge bar.
   Snapshot before edit: `app/app.js.bak-0627-codex-boc-compact2` and
   `app/index.html.bak-0627-codex-boc-compact2`.

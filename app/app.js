@@ -4176,6 +4176,18 @@ function loadImageUrl(url, name) {
   image.src = url;
 }
 
+function loadQueryAsset() {
+  const asset = readQueryParam("asset");
+  if (!asset) return;
+  const normalized = asset.replace(/^\.?\//, "");
+  if (!/^assets\/[-\w./]+?\.(png|jpe?g|webp)$/i.test(normalized) || normalized.includes("..")) {
+    log(`Ignored invalid benchmark asset path: ${asset}`);
+    return;
+  }
+  const name = normalized.split("/").pop() || "benchmark.png";
+  loadImageUrl(`./${normalized}`, name);
+}
+
 function backgroundDetachNoOp(imageData, mode = "off", reason = "off") {
   return {
     imageData,
@@ -6288,3 +6300,6 @@ try {
 } catch (e) { /* ignore */ }
 applySelectorState();
 renderBenchmarkLedger();
+try {
+  loadQueryAsset();
+} catch (e) { /* ignore */ }
