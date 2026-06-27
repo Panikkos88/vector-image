@@ -148,6 +148,17 @@ KEY FINDINGS (update the diagnosis):
      pixels (or treat AA as coverage), so the elbow lands on k=3 like VM.
 NEXT (revised priority): (A) boundary/curve precision on palette regions [biggest lever now],
 (B) AA-aware k selection (-> k=3), (C) then the auto-router (step 5). Target BOC 11% -> ~3%.
+UPDATE 2026-06-26 [claude]: re-tested Schneider curve fitting ON the correct k=3 palette regions
+(snapshot app.js.bak-0626h). It made BOC WORSE (k3 11.23 -> 12.0; k4 -> 17.0). So CURVE FITTING
+IS DEFINITIVELY NOT THE LEVER (disproven twice; reverted, kept Catmull-Rom). The ~11% edge gap
+at correct structure (k3, 55 paths) is BOUNDARY-PLACEMENT PRECISION on the MANY fine high-
+contrast edges (wreath leaves, thin Greek strokes, dashes): MAE 1.0%/hot 2.6% are low, but
+edge-weighted RMSE punishes small per-edge offsets across thousands of fine-edge pixels. VM
+nails each fine edge sub-pixel; we're slightly off on each -> accumulates to ~11%. This is an
+UNSOLVED precision problem. Likely investigation (NOT curves): (i) sub-pixel iso placement
+convention/offset in marching squares (possible ~0.5px systematic), (ii) simplifyClosedLoop
+tolerance (0.5) shifting points -> try ~0.2 / skip simplify on small loops, (iii) the soft
+membership field accuracy. Cheap experiments before any big build. Do NOT retry curve fitting.
 
 ## PALETTE ENGINE SPEC (next major build) — 2026-06-26 [claude]  *** START HERE ***
 GOAL: close the VM gap on FLAT logos (BOC 12.6% -> ~3% edge; NS CAR 7.5% -> ~3%) by building a
