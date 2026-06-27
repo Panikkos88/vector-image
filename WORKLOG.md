@@ -396,6 +396,13 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-27 [claude] CODE QA pass (read-only, no app code changed). Full report:
+  `research/qa-2026-06-27-claude.md`. Result: NO bugs. Clean: syntax, no dup defs, no dead/
+  debug code, guards present, default routes via auto-router. Action items for Codex:
+  W1 gate dev routes (?engine/?paletteK/?asset) before public launch; W2 verify-or-remove the
+  region downscale-eval/promote=6 WIP; W3 add explicit flat-only mode to decouple Palette from
+  Region's fitRegionAdaptive; notes N1-N5 (silent catches, threshold-14 caution, stale engines,
+  32 bak files, single-file size). Scope: static + targeted logic + 4-sample dynamic, not a full audit.
 - 2026-06-27 [claude] DARK-GLOW investigation (no code change) — "A" is harder than estimated;
   cheap/medium fixes verified NOT to reach VM. Precise diagnosis:
     * Image = logo on black with a soft RADIAL GLOW/halo behind irregular text, fading to black.
