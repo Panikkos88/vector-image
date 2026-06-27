@@ -3,6 +3,17 @@
 Shared handoff log for this project. **Two agents work here: Codex and Claude.**
 They do not share memory — this file is the shared brain.
 
+> **HANDOFF -> CODEX (2026-06-27 [claude]):** Tree clean, HEAD `62935a3` == origin/main, live
+> Cloud = rev `00012-wpx` / cache `20260627-finetext1`. Done this session: fine-text fix shipped
+> (4.62%->3.20% edge, 179->61 paths; AA-fringe step-down in `selectPaletteLadderEntry`). BOC +
+> fine-text now match VM. Verified-and-DISPROVEN (don't retry): outline routing, dark-glow
+> routing, dark-glow higher-k. Remaining gaps are all engine-quality (see latest Change Log
+> entries for precise diagnoses): dark-glow (glow banding), outline (thin-stroke precision),
+> metal (shaded mesh). RECOMMENDED NEXT BUILD: glow-targeted tonal banding (detect smooth dark
+> bg, band its tonal range VM-style, independent of global k-means) — deliberate feature, not a
+> quick fix; technique extends toward metal. Do NOT hack fitRegionAdaptive's shared flat
+> threshold (would re-bloat fine-text). Awaiting user direction on whether to build it or consolidate.
+
 ## Protocol
 - **At session start:** read this file top to bottom before doing anything.
 - **At session end:** update `Current State` + `Next Steps`, and add a `Change Log` entry.
