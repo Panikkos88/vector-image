@@ -133,6 +133,16 @@ Default/no-query BOC still routes to Palette/k=3, but the optimizer now selects
 SVG ~162 KB, runtime ~6.6-6.9s local/cloud. This matches VM's known 2.41% edge / 55-path
 reference while reducing nodes vs the previous 15,835-node `tight-corners-s18`.
 
+2026-06-27 [claude]: Fine-text Palette path bloat FIXED (picked up Codex's next target). The
+palette k-selection was promoting the anti-aliased fringe (teal<->white blend) to a 4th color,
+spawning ~130 sliver components + spurious gradients (179 paths). Added an AA-fringe step-down
+in `selectPaletteLadderEntry` (+ NEW `paletteFringeCount`): if a chosen palette color is just a
+blend of two others, prefer the largest fringe-free palette. Default auto-router now: fine-text
+edge RMSE 4.62%->3.20%, MAE 0.16->0.17%, hot 0.6->0.4%, paths 179->61 (= VM's 61), 0 gradients.
+BOC unchanged (2.41% / 55). k-check across the benchmark pack: only fine-text changed (k4->k3);
+all chosen palettes fringe-free; no other regression. Deployed Cloud Run revision
+`vector-accuracy-studio-00012-wpx`, cache `20260627-finetext1`.
+
 Quality is near the ceiling of the current "quantize → trace regions → patch" architecture.
 Recent post-passes (sub-pixel nudge, background detach v1/v2, micro-prune) are mostly
 **rejected by the metric guard** because they don't beat the curve-optimized baseline.
@@ -375,6 +385,22 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-27 [claude] Fine-text Palette fix: AA-fringe step-down in palette k-selection.
+  Files: app/app.js NEW `paletteFringeCount`; rewrote `selectPaletteLadderEntry` to step down
+  to the largest fringe-free palette when the chosen one contains a blend (AA edge) color.
+  index.html cache -> `?v=20260627-finetext1`. Snapshot app.js.bak-0627a-claude-finetext.
+  LOCAL: npm/node --check OK. Browser (auto router, localhost:8011):
+    fine-text 4.62%->3.20% edge, MAE 0.17%, hot 0.4%, 179->61 paths, 0 gradients, ~3.9s.
+    BOC unchanged 2.41% edge / 55 paths (no regression). Benchmark-pack k-check: only
+    fine-text changed (k4->k3); every chosen palette now fringe-free.
+  VM: fine-text VM 2.26% edge / 61 paths -> our delta +0.94 pts (was +2.36). BOC matches VM (2.41%).
+  CLOUD: deployed revision vector-accuracy-studio-00012-wpx, cache 20260627-finetext1; verified
+    via HTTP that the new build + `paletteFringeCount` are live. NOTE: functional re-run was on
+    the byte-identical local build — Claude_Preview is sandboxed to localhost and cannot drive the
+    remote origin (use Claude_in_Chrome for a true remote functional run).
+  DECISION: accept. Edge improves, paths drop to VM's count, hot/MAE flat, no regression.
+  NEXT (Codex's order): glow/shadow color modeling (dark-glow MAE 2.04% vs VM 0.09%), then
+  router/engine fix for outline+metal logos currently sent to Region (13% / 9% edge vs VM ~1.8%).
 - 2026-06-27 [codex] Benchmark Pack v1 added, VM-referenced, deployed, and proof-loop tested.
   Snapshot before edit: `app/app.js.bak-0627-codex-benchmark1` and
   `app/index.html.bak-0627-codex-benchmark1`.
