@@ -19,6 +19,7 @@
           <span>Open Image</span>
         </label>
         <button id="sampleButton" type="button">Load Sample</button>
+        <button id="bocButton" type="button">Load BOC Test</button>
         <button id="shadedButton" type="button">Load Shaded Test</button>
 
         <button id="traceButton" type="button" disabled>Trace</button>
@@ -72,19 +73,19 @@
           <section class="active-settings">
             <div class="setting-row">
               <span>Engine</span>
-              <strong>Region engine (SLIC)</strong>
+              <strong id="activeEngineLabel">Auto router (Palette/Region)</strong>
             </div>
             <div class="setting-row">
               <span>Detail</span>
-              <strong>Medium</strong>
+              <strong id="activeDetailLabel">Medium</strong>
             </div>
             <div class="setting-row">
               <span>Anti-aliasing</span>
-              <strong>Smooth</strong>
+              <strong id="activeAntiAliasLabel">Smooth</strong>
             </div>
             <div class="setting-row">
               <span>Optimization</span>
-              <strong>Guarded region loop</strong>
+              <strong id="activeOptimizationLabel">Auto route + metric guard</strong>
             </div>
           </section>
         </aside>
@@ -116,6 +117,6 @@
 
     <script src="./vendor/imagetracer.js"></script>
     <script src="./background-detach.js?v=20260626-hybrid1"></script>
-    <script src="./app.js?v=20260626-palette1"></script>
+    <script src="./app.js?v=20260627-router1"></script>
   </body>
 </html>

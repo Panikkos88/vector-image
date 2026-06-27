@@ -1,6 +1,7 @@
 const fileInput = document.getElementById("fileInput");
 const sampleButton = document.getElementById("sampleButton");
 const shadedButton = document.getElementById("shadedButton");
+const bocButton = document.getElementById("bocButton");
 const traceButton = document.getElementById("traceButton");
 const downloadButton = document.getElementById("downloadButton");
 const dropZone = document.getElementById("dropZone");
@@ -25,6 +26,10 @@ const setBaselineButton = document.getElementById("setBaselineButton");
 const compareBaselineButton = document.getElementById("compareBaselineButton");
 const exportBenchmarkButton = document.getElementById("exportBenchmarkButton");
 const clearBenchmarkButton = document.getElementById("clearBenchmarkButton");
+const activeEngineLabel = document.getElementById("activeEngineLabel");
+const activeDetailLabel = document.getElementById("activeDetailLabel");
+const activeAntiAliasLabel = document.getElementById("activeAntiAliasLabel");
+const activeOptimizationLabel = document.getElementById("activeOptimizationLabel");
 const colorCountInput = document.getElementById("colorCount");
 const maxSizeInput = document.getElementById("maxSize");
 const iterationsInput = document.getElementById("iterations");
@@ -54,7 +59,7 @@ const BENCHMARK_STORAGE_KEY = "vectorAccuracyStudio.benchmarkRuns.v1";
 const MAX_BENCHMARK_RUNS = 80;
 
 const selectorState = {
-  engine: "regions",
+  engine: "auto",
   imageType: "artwork-aa",
   detail: "medium",
   antiAlias: "smooth",
@@ -63,6 +68,11 @@ const selectorState = {
   backgroundDetach: "off",
   colorMode: "unlimited",
   effects: "preserve"
+};
+
+const devOptions = {
+  paletteForceK: null,
+  paletteOptimize: true
 };
 
 const detailPresets = {
@@ -78,6 +88,7 @@ const imageTypeLabels = {
 };
 
 const engineLabels = {
+  auto: "Auto router (Palette/Region)",
   vtracer: "VTracer clustering (experimental)",
   imagetracer: "ImageTracerJS baseline",
   experimental: "Experimental tracer",
@@ -146,6 +157,18 @@ function applySelectorState({ syncInternals = true } = {}) {
   updateSelectedButtons(colorModeButtons, "colorMode", selectorState.colorMode);
   updateSelectedButtons(effectsButtons, "effects", selectorState.effects);
   if (customColorControl) customColorControl.classList.toggle("is-hidden", selectorState.colorMode !== "custom");
+  if (activeEngineLabel) activeEngineLabel.textContent = engineLabels[selectorState.engine] || "Auto vector engine";
+  if (activeDetailLabel) activeDetailLabel.textContent = selectorState.detail[0].toUpperCase() + selectorState.detail.slice(1);
+  if (activeAntiAliasLabel) activeAntiAliasLabel.textContent = antiAliasLabels[selectorState.antiAlias] || selectorState.antiAlias;
+  if (activeOptimizationLabel) {
+    activeOptimizationLabel.textContent = selectorState.engine === "auto"
+      ? "Auto route + metric guard"
+      : selectorState.engine === "palette"
+      ? "Palette boundary optimizer"
+      : selectorState.engine === "regions"
+        ? "Guarded region loop"
+        : "Metric-guarded trace";
+  }
 
   if (syncInternals) {
     if (maxSizeInput) maxSizeInput.value = preset.maxSize;
@@ -171,6 +194,21 @@ function currentTraceSettings() {
   if (colorCountInput) colorCountInput.value = colors;
 
   return { maxSize, iterations, colors };
+}
+
+function readQueryParam(name) {
+  try {
+    return new URLSearchParams(location.search).get(name);
+  } catch (error) {
+    return null;
+  }
+}
+
+function readQueryNumber(name, min, max) {
+  const raw = readQueryParam(name);
+  if (raw === null || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? clamp(Math.round(value), min, max) : null;
 }
 
 function rgbToHex(rgb) {
@@ -422,20 +460,24 @@ function drawImageToCanvas(image, canvas, maxSize) {
   return { width, height, scale };
 }
 
-function buildColorBuckets(data, bucketBits = 5) {
+function buildColorBuckets(data, bucketBits = 5, options = {}) {
   const buckets = new Map();
   const shift = 8 - bucketBits;
-  for (let i = 0; i < data.length; i += 4) {
+  const downweightMask = options.downweightMask || null;
+  const downweight = Number.isFinite(options.downweight) ? options.downweight : 1;
+  for (let i = 0, pixel = 0; i < data.length; i += 4, pixel += 1) {
     if (data[i + 3] < 12) continue;
+    const weight = downweightMask && downweightMask[pixel] ? downweight : 1;
+    if (weight <= 0) continue;
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
     const key = `${r >> shift},${g >> shift},${b >> shift}`;
     const bucket = buckets.get(key) || [0, 0, 0, 0];
-    bucket[0] += r;
-    bucket[1] += g;
-    bucket[2] += b;
-    bucket[3] += 1;
+    bucket[0] += r * weight;
+    bucket[1] += g * weight;
+    bucket[2] += b * weight;
+    bucket[3] += weight;
     buckets.set(key, bucket);
   }
 
@@ -3902,6 +3944,8 @@ function buildBenchmarkRun(context) {
       backgroundDetach: selectorState.backgroundDetach,
       colorMode: selectorState.colorMode,
       effects: selectorState.effects,
+      paletteForceK: devOptions.paletteForceK,
+      paletteOptimize: devOptions.paletteOptimize,
       removeBackground: settings.removeLargestColor,
       maxSize: settings.maxSize,
       colors: settings.colors,
@@ -3918,8 +3962,11 @@ function buildBenchmarkRun(context) {
       filters: filterCount
     },
     difference: compactObject(differenceStats),
+    routerDecision: compactObject(traced.routerDecision),
     layers: compactObject(traced.layerSeparation),
     backgroundDetach: compactObject(traced.backgroundDetach),
+    paletteInfo: compactObject(traced.paletteInfo),
+    paletteOptimization: compactObject(traced.paletteOptimization),
     regionEngine: compactObject(traced.regionEngine),
     regionOptimization: compactObject(traced.regionOptimization),
     subPixelEdges: compactObject(traced.subPixelEdges),
@@ -4436,10 +4483,24 @@ function regionFillMarkup(fit, id) {
 // boundaries sit at the true anti-aliased crossing instead of on pixel cells (roadmap #3).
 function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
   const { regionLabels, regionCount, regionColor, regionArea, bbox, width, height } = regions;
+  const boundary = options.regionBoundary || {};
+  const defaultSimplifyTolerance = options.detail === "high" ? 0.5 : options.detail === "low" ? 1.0 : 0.75;
   const fit = {
-    simplifyTolerance: options.detail === "high" ? 0.5 : options.detail === "low" ? 1.0 : 0.75,
-    cornerAngle: 1.0,
-    minArea: options.detail === "low" ? 6 : 4
+    simplifyTolerance: Number.isFinite(boundary.simplifyTolerance) ? Math.max(0, boundary.simplifyTolerance) : defaultSimplifyTolerance,
+    cornerAngle: Number.isFinite(boundary.cornerAngle) ? boundary.cornerAngle : 1.0,
+    minArea: Number.isFinite(boundary.minArea) ? Math.max(1, boundary.minArea) : options.detail === "low" ? 6 : 4,
+    iso: Number.isFinite(boundary.iso) ? clamp(boundary.iso, 0.05, 0.95) : 0.5,
+    coordinateOffsetX: Number.isFinite(boundary.coordinateOffsetX)
+      ? boundary.coordinateOffsetX
+      : Number.isFinite(boundary.coordinateOffset)
+        ? boundary.coordinateOffset
+        : 0,
+    coordinateOffsetY: Number.isFinite(boundary.coordinateOffsetY)
+      ? boundary.coordinateOffsetY
+      : Number.isFinite(boundary.coordinateOffset)
+        ? boundary.coordinateOffset
+        : 0,
+    variantName: boundary.name || "base"
   };
   const order = [];
   for (let r = 0; r < regionCount; r += 1) order.push(r);
@@ -4493,13 +4554,13 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
         }
       }
     }
-    const segs = extractIsoSegments(field, fw, fh, 0.5);
+    const segs = extractIsoSegments(field, fw, fh, fit.iso);
     if (!segs.length) { droppedTiny += 1; continue; }
     const linked = linkSegmentsIntoLoops(segs, fw, fh);
     const subpaths = [];
     for (const loop of linked.loops) {
       if (Math.abs(polygonArea(loop.points)) < fit.minArea) continue;
-      const pts = loop.points.map((p) => [p[0] + x0 - 1, p[1] + y0 - 1]);
+      const pts = loop.points.map((p) => [p[0] + x0 - 1 + fit.coordinateOffsetX, p[1] + y0 - 1 + fit.coordinateOffsetY]);
       const d = loopToSmoothSubpath(pts, fit);
       if (d) subpaths.push(d);
     }
@@ -4527,7 +4588,20 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
     loopCount: used,
     engineName: "Region engine (SLIC + merge + adaptive gradients)",
     skippedBackgroundLabels: 0,
-    regionEngine: { regions: regionCount, drawn: used, gradients: gradientsUsed, droppedTiny }
+    regionEngine: {
+      regions: regionCount,
+      drawn: used,
+      gradients: gradientsUsed,
+      droppedTiny,
+      boundary: {
+        variant: fit.variantName,
+        iso: fit.iso,
+        simplifyTolerance: fit.simplifyTolerance,
+        cornerAngle: fit.cornerAngle,
+        coordinateOffsetX: fit.coordinateOffsetX,
+        coordinateOffsetY: fit.coordinateOffsetY
+      }
+    }
   };
 }
 
@@ -4935,6 +5009,91 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
 }
 
 // === PALETTE ENGINE (flat-logo path, mirrors Vector Magic) ===
+function markPaletteTransition(mask, width, height, x, y, radius) {
+  for (let yy = Math.max(0, y - radius); yy <= Math.min(height - 1, y + radius); yy += 1) {
+    for (let xx = Math.max(0, x - radius); xx <= Math.min(width - 1, x + radius); xx += 1) {
+      mask[yy * width + xx] = 1;
+    }
+  }
+}
+
+function buildPaletteTransitionMask(imageData, coverageField = [], options = {}) {
+  const { width, height, data } = imageData;
+  const mask = new Uint8Array(width * height);
+  const coverageRadius = Number.isFinite(options.coverageRadius) ? options.coverageRadius : 1;
+  const contrastRadius = Number.isFinite(options.contrastRadius) ? options.contrastRadius : 0;
+  const contrastThreshold = Number.isFinite(options.contrastThreshold) ? options.contrastThreshold : 34;
+  let coverageMarked = 0;
+  let contrastMarked = 0;
+
+  if (Array.isArray(coverageField)) {
+    for (const sample of coverageField) {
+      if (!sample) continue;
+      const x = Math.round(sample.x);
+      const y = Math.round(sample.y);
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      markPaletteTransition(mask, width, height, x, y, coverageRadius);
+      coverageMarked += 1;
+    }
+  }
+
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const index = (y * width + x) * 4;
+      if (data[index + 3] < 12) continue;
+      if (localContrastFromData(data, width, height, x, y) < contrastThreshold) continue;
+      markPaletteTransition(mask, width, height, x, y, contrastRadius);
+      contrastMarked += 1;
+    }
+  }
+
+  let pixels = 0;
+  for (let i = 0; i < mask.length; i += 1) {
+    if (mask[i]) pixels += 1;
+  }
+
+  return {
+    mask,
+    pixels,
+    pixelRatio: pixels / Math.max(1, width * height),
+    coverageMarked,
+    contrastMarked,
+    coverageRadius,
+    contrastRadius,
+    contrastThreshold
+  };
+}
+
+function selectPaletteLadderEntry(ladder, options = {}) {
+  const residualKey = "selectionResidual";
+  const aaAware = Boolean(options.aaAware);
+  const threshold = options.residualThreshold || (aaAware ? 12 : 9);
+  let thresholdChoice = ladder[ladder.length - 1];
+  for (const entry of ladder) {
+    if (entry[residualKey] <= threshold) {
+      thresholdChoice = entry;
+      break;
+    }
+  }
+
+  if (!aaAware || ladder.length < 3) return thresholdChoice;
+
+  const elbowResidual = options.elbowResidualThreshold || 16;
+  const elbowRatio = options.elbowRatio || 0.42;
+  for (let i = 1; i < ladder.length - 1; i += 1) {
+    const prev = ladder[i - 1];
+    const curr = ladder[i];
+    const next = ladder[i + 1];
+    const prevDrop = prev[residualKey] - curr[residualKey];
+    const nextDrop = curr[residualKey] - next[residualKey];
+    if (curr[residualKey] > elbowResidual) continue;
+    if (prevDrop <= 0) continue;
+    if (nextDrop <= Math.max(0.75, prevDrop * elbowRatio)) return curr;
+  }
+
+  return thresholdChoice;
+}
+
 // Weighted mean nearest-center distance of color buckets to a palette (quantization residual).
 function paletteResidual(buckets, centers) {
   let sum = 0;
@@ -4976,18 +5135,109 @@ function kmeansPalette(buckets, k, iters) {
 
 // STEP 1: palette ladder — best palette per k, pick the elbow (smallest k that explains the image).
 function computePaletteLadder(imageData, options = {}) {
-  const buckets = buildColorBuckets(imageData.data);
+  const fullBuckets = buildColorBuckets(imageData.data);
+  const transition = options.aaAware === false
+    ? null
+    : buildPaletteTransitionMask(imageData, options.coverageField || [], options);
+  const transitionOk = transition &&
+    transition.pixels > Math.max(32, imageData.width * imageData.height * 0.001) &&
+    transition.pixelRatio < 0.45;
+  const selectionBuckets = transitionOk
+    ? buildColorBuckets(imageData.data, 5, {
+        downweightMask: transition.mask,
+        downweight: Number.isFinite(options.transitionWeight) ? options.transitionWeight : 0.08
+      })
+    : fullBuckets;
+  const buckets = selectionBuckets.length >= 2 ? selectionBuckets : fullBuckets;
+  const aaAware = buckets !== fullBuckets;
   const maxK = Math.min(options.maxK || 16, Math.max(2, buckets.length));
   const ladder = [];
   for (let k = 2; k <= maxK; k += 1) {
     const palette = kmeansPalette(buckets, k, 8);
-    ladder.push({ k, palette, residual: paletteResidual(buckets, palette) });
+    const fullResidual = paletteResidual(fullBuckets, palette);
+    const coreResidual = paletteResidual(buckets, palette);
+    ladder.push({
+      k,
+      palette,
+      residual: fullResidual,
+      fullResidual,
+      coreResidual,
+      selectionResidual: aaAware ? coreResidual : fullResidual
+    });
   }
-  const absThresh = options.residualThreshold || 9;
-  let chosen = ladder[ladder.length - 1];
-  for (const e of ladder) { if (e.residual <= absThresh) { chosen = e; break; } }
+  let chosen = selectPaletteLadderEntry(ladder, { ...options, aaAware });
   if (options.forceK) { const f = ladder.find((e) => e.k === options.forceK); if (f) chosen = f; }
-  return { ladder, chosen };
+  return {
+    ladder,
+    chosen,
+    selection: {
+      aaAware,
+      mode: aaAware ? "aa-aware-core" : "full-image",
+      transitionPixels: transition?.pixels || 0,
+      transitionPixelRatio: transition?.pixelRatio || 0,
+      coverageMarked: transition?.coverageMarked || 0,
+      contrastMarked: transition?.contrastMarked || 0,
+      transitionWeight: aaAware ? Number.isFinite(options.transitionWeight) ? options.transitionWeight : 0.08 : 1,
+      residualThreshold: options.residualThreshold || (aaAware ? 12 : 9),
+      elbowResidualThreshold: options.elbowResidualThreshold || 16,
+      elbowRatio: options.elbowRatio || 0.42,
+      bucketCount: fullBuckets.length,
+      selectionBucketCount: buckets.length
+    }
+  };
+}
+
+function paletteLadderOptions(coverageField) {
+  return {
+    maxK: 16,
+    forceK: devOptions.paletteForceK,
+    coverageField,
+    transitionWeight: 0.08
+  };
+}
+
+function autoRouteFromPaletteLadder(ladder) {
+  const chosen = ladder.chosen || {};
+  const selection = ladder.selection || {};
+  const transitionRatio = selection.transitionPixelRatio || 0;
+  const selectedResidual = Number.isFinite(chosen.selectionResidual) ? chosen.selectionResidual : Infinity;
+  const fullResidual = Number.isFinite(chosen.fullResidual) ? chosen.fullResidual : Infinity;
+  const smallPalette = chosen.k <= 4;
+  const coreFits = selectedResidual <= 12.5;
+  const fullFits = fullResidual <= 18;
+  const edgeSignal = transitionRatio >= 0.006 && transitionRatio <= 0.22;
+  const paletteLikely = smallPalette && coreFits && fullFits && edgeSignal;
+  const selectedEngine = paletteLikely ? "palette" : "regions";
+  const failed = [];
+  if (!smallPalette) failed.push(`k ${chosen.k || "n/a"} > 4`);
+  if (!coreFits) failed.push(`core residual ${formatNumber(selectedResidual)} > 12.5`);
+  if (!fullFits) failed.push(`full residual ${formatNumber(fullResidual)} > 18`);
+  if (!edgeSignal) failed.push(`transition ${(transitionRatio * 100).toFixed(1)}% outside flat-logo band`);
+
+  return {
+    mode: "auto",
+    selectedEngine,
+    selectedEngineLabel: engineLabels[selectedEngine],
+    reason: paletteLikely ? "small clean palette with strong edge signal" : `palette guard failed: ${failed.join(", ") || "not flat-logo-like"}`,
+    paletteK: chosen.k,
+    selectionResidual: chosen.selectionResidual,
+    coreResidual: chosen.coreResidual,
+    fullResidual: chosen.fullResidual,
+    transitionPixelRatio: transitionRatio,
+    transitionPixels: selection.transitionPixels || 0,
+    bucketCount: selection.bucketCount || 0,
+    selectionBucketCount: selection.selectionBucketCount || 0,
+    colors: Array.isArray(chosen.palette) ? chosen.palette.map(rgbToHex) : []
+  };
+}
+
+function forcedRouteDecision(engine) {
+  return {
+    mode: "forced",
+    selectedEngine: engine,
+    selectedEngineLabel: engineLabels[engine] || engineLabels.experimental,
+    reason: "hidden engine override"
+  };
 }
 
 function quantizeToPalette(imageData, palette) {
@@ -5033,6 +5283,181 @@ function buildPaletteRegions(imageData, palette, options = {}) {
   return { regionLabels, regionCount: rid, regionColor, regionArea, bbox, width, height };
 }
 
+function paletteBoundaryCandidates(options = {}) {
+  const baseTolerance = options.detail === "high" ? 0.5 : options.detail === "low" ? 1.0 : 0.75;
+  const fineTolerance = Math.min(0.25, baseTolerance);
+  const rawTolerance = 0.05;
+  return [
+    { name: "base", label: "Current placement", variant: { name: "base" } },
+    { name: "fine-simplify", label: "Finer simplification", variant: { name: "fine-simplify", simplifyTolerance: fineTolerance } },
+    { name: "raw-loop", label: "Near-raw loop", variant: { name: "raw-loop", simplifyTolerance: rawTolerance } },
+    { name: "centered", label: "Pixel-center +0.5", variant: { name: "centered", coordinateOffset: 0.5 } },
+    { name: "centered-fine", label: "Pixel-center + fine simplify", variant: { name: "centered-fine", coordinateOffset: 0.5, simplifyTolerance: fineTolerance } },
+    { name: "centered-raw", label: "Pixel-center + raw loop", variant: { name: "centered-raw", coordinateOffset: 0.5, simplifyTolerance: rawTolerance } },
+    { name: "centered-s08", label: "Pixel-center simplify 0.08", variant: { name: "centered-s08", coordinateOffset: 0.5, simplifyTolerance: 0.08 } },
+    { name: "centered-s10", label: "Pixel-center simplify 0.10", variant: { name: "centered-s10", coordinateOffset: 0.5, simplifyTolerance: 0.10 } },
+    { name: "centered-s12", label: "Pixel-center simplify 0.12", variant: { name: "centered-s12", coordinateOffset: 0.5, simplifyTolerance: 0.12 } },
+    { name: "centered-s15", label: "Pixel-center simplify 0.15", variant: { name: "centered-s15", coordinateOffset: 0.5, simplifyTolerance: 0.15 } },
+    { name: "centered-s18", label: "Pixel-center simplify 0.18", variant: { name: "centered-s18", coordinateOffset: 0.5, simplifyTolerance: 0.18 } },
+    { name: "centered-s20", label: "Pixel-center simplify 0.20", variant: { name: "centered-s20", coordinateOffset: 0.5, simplifyTolerance: 0.20 } },
+    { name: "centered-iso45", label: "Pixel-center iso 0.45", variant: { name: "centered-iso45", coordinateOffset: 0.5, simplifyTolerance: fineTolerance, iso: 0.45 } },
+    { name: "centered-iso55", label: "Pixel-center iso 0.55", variant: { name: "centered-iso55", coordinateOffset: 0.5, simplifyTolerance: fineTolerance, iso: 0.55 } },
+    { name: "tight-corners", label: "Tighter corners", variant: { name: "tight-corners", coordinateOffset: 0.5, simplifyTolerance: fineTolerance, cornerAngle: 0.75 } },
+    { name: "tight-corners-s12", label: "Tighter corners simplify 0.12", variant: { name: "tight-corners-s12", coordinateOffset: 0.5, simplifyTolerance: 0.12, cornerAngle: 0.75 } },
+    { name: "tight-corners-s15", label: "Tighter corners simplify 0.15", variant: { name: "tight-corners-s15", coordinateOffset: 0.5, simplifyTolerance: 0.15, cornerAngle: 0.75 } },
+    { name: "tight-corners-s18", label: "Tighter corners simplify 0.18", variant: { name: "tight-corners-s18", coordinateOffset: 0.5, simplifyTolerance: 0.18, cornerAngle: 0.75 } },
+    { name: "tight-corners-s20", label: "Tighter corners simplify 0.20", variant: { name: "tight-corners-s20", coordinateOffset: 0.5, simplifyTolerance: 0.20, cornerAngle: 0.75 } },
+    { name: "tight-corners-s21", label: "Tighter corners simplify 0.21", variant: { name: "tight-corners-s21", coordinateOffset: 0.5, simplifyTolerance: 0.21, cornerAngle: 0.75 } },
+    { name: "tight-corners-s22", label: "Tighter corners simplify 0.22", variant: { name: "tight-corners-s22", coordinateOffset: 0.5, simplifyTolerance: 0.22, cornerAngle: 0.75 } },
+    { name: "tight-corners-s23", label: "Tighter corners simplify 0.23", variant: { name: "tight-corners-s23", coordinateOffset: 0.5, simplifyTolerance: 0.23, cornerAngle: 0.75 } },
+    { name: "tight-corners-s24", label: "Tighter corners simplify 0.24", variant: { name: "tight-corners-s24", coordinateOffset: 0.5, simplifyTolerance: 0.24, cornerAngle: 0.75 } },
+    { name: "tight-corners-s25", label: "Tighter corners simplify 0.25", variant: { name: "tight-corners-s25", coordinateOffset: 0.5, simplifyTolerance: 0.25, cornerAngle: 0.75 } }
+  ];
+}
+
+function paletteBoundaryCandidatePassesGuard(candidate, base, optimizer) {
+  if (!candidate.difference || candidate.difference.error || !base.difference || base.difference.error) return false;
+  const edgeDelta = candidate.difference.edgeWeightedRmse - base.difference.edgeWeightedRmse;
+  const meanDelta = candidate.difference.meanError - base.difference.meanError;
+  const hotDelta = candidate.difference.hotPixelRatio - base.difference.hotPixelRatio;
+  const contaminationDelta = candidate.difference.backgroundContaminationRatio - base.difference.backgroundContaminationRatio;
+  const strongVisualWin = candidate.difference.edgeWeightedRmse <= optimizer.strongEdgeThreshold &&
+    candidate.difference.edgeWeightedRmse < base.difference.edgeWeightedRmse - optimizer.strongEdgeImprovement;
+  const pathOk = candidate.paths <= Math.ceil(base.paths * optimizer.maxPathGrowth);
+  const nodeOk = candidate.nodes <= Math.ceil(base.nodes * (strongVisualWin ? optimizer.maxNodeGrowthStrong : optimizer.maxNodeGrowth));
+  const primaryWin = edgeDelta < -optimizer.minEdgeImprovement || strongVisualWin;
+  const tieBreakWin = Math.abs(edgeDelta) <= optimizer.minEdgeImprovement && meanDelta < -optimizer.minMeanImprovement;
+  return pathOk &&
+    nodeOk &&
+    hotDelta <= optimizer.hotPixelSlack &&
+    contaminationDelta <= optimizer.contaminationSlack &&
+    (primaryWin || tieBreakWin);
+}
+
+function selectPaletteBoundaryResult(results, optimizer) {
+  const base = results[0];
+  const eligible = results.filter((result, index) => index === 0 || paletteBoundaryCandidatePassesGuard(result, base, optimizer));
+  const measured = eligible.filter((result) => result.difference && !result.difference.error);
+  if (!optimizer.enabled || measured.length <= 1) return { best: base, bestEdge: base, edgeBandLimit: base.difference?.edgeWeightedRmse || Infinity };
+
+  let bestEdge = measured[0];
+  for (const result of measured.slice(1)) {
+    if (result.difference.edgeWeightedRmse < bestEdge.difference.edgeWeightedRmse) bestEdge = result;
+  }
+
+  const edgeBandLimit = bestEdge.difference.edgeWeightedRmse + optimizer.nodePreferenceEdgeBand;
+  const compactEligible = measured.filter((result) =>
+    result.difference.edgeWeightedRmse <= edgeBandLimit &&
+    result.difference.hotPixelRatio <= bestEdge.difference.hotPixelRatio + optimizer.nodePreferenceHotSlack
+  );
+  let best = compactEligible[0] || bestEdge;
+  for (const result of compactEligible.slice(1)) {
+    if (result.nodes < best.nodes || (result.nodes === best.nodes && result.difference.edgeWeightedRmse < best.difference.edgeWeightedRmse)) best = result;
+  }
+  return { best, bestEdge, edgeBandLimit };
+}
+
+async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptions, ladder) {
+  const regions = buildPaletteRegions(segSource, ladder.chosen.palette, { minArea: 6 });
+  const optimizer = {
+    enabled: devOptions.paletteOptimize,
+    minEdgeImprovement: 0.00005,
+    minMeanImprovement: 0.00003,
+    strongEdgeThreshold: 0.035,
+    strongEdgeImprovement: 0.03,
+    nodePreferenceEdgeBand: 0.003,
+    nodePreferenceHotSlack: 0.001,
+    hotPixelSlack: 0.001,
+    contaminationSlack: 0.001,
+    maxPathGrowth: 1.1,
+    maxNodeGrowth: 2.5,
+    maxNodeGrowthStrong: 8
+  };
+  const guardOptions = { backgroundColor: pipelineOptions.backgroundColor };
+  const candidates = optimizer.enabled
+    ? paletteBoundaryCandidates(pipelineOptions)
+    : paletteBoundaryCandidates(pipelineOptions).slice(0, 1);
+  const results = [];
+
+  for (const candidate of candidates) {
+    const traced = traceRegionsToSvg(regions, {
+      ...pipelineOptions,
+      regionBoundary: candidate.variant
+    }, segSource);
+    traced.pathCount = countSvgElements(traced.svg, "path");
+    let difference = null;
+    try {
+      difference = await measureSvgDifference(referenceImageData, traced.svg, guardOptions);
+    } catch (error) {
+      difference = { error: error.message };
+    }
+    results.push({
+      candidate,
+      traced,
+      difference,
+      paths: traced.pathCount,
+      nodes: estimateSvgPointCount(traced.svg)
+    });
+    if (!optimizer.enabled) break;
+    await nextFrame();
+  }
+
+  const base = results[0];
+  const selection = selectPaletteBoundaryResult(results, optimizer);
+  const best = selection.best;
+  const bestEdge = selection.bestEdge;
+
+  const selected = best.candidate.name !== "base";
+  const stats = {
+    enabled: optimizer.enabled,
+    selected,
+    guardReason: optimizer.enabled
+      ? selected ? "edge metric improved" : "metric guard kept base palette boundary"
+      : "off",
+    candidatesTested: results.length,
+    selectedCandidate: best.candidate.name,
+    selectedLabel: best.candidate.label,
+    bestEdgeCandidate: bestEdge.candidate.name,
+    edgeBandLimit: selection.edgeBandLimit,
+    nodePreferenceEdgeBand: optimizer.nodePreferenceEdgeBand,
+    forcedK: devOptions.paletteForceK,
+    selectedK: ladder.chosen.k,
+    selectedResidual: ladder.chosen.residual,
+    selectedFullResidual: ladder.chosen.fullResidual,
+    selectedCoreResidual: ladder.chosen.coreResidual,
+    selectedSelectionResidual: ladder.chosen.selectionResidual,
+    paletteSelection: ladder.selection,
+    regions: regions.regionCount,
+    baselineEdgeRmse: base.difference?.edgeWeightedRmse,
+    selectedEdgeRmse: best.difference?.edgeWeightedRmse,
+    baselineMeanError: base.difference?.meanError,
+    selectedMeanError: best.difference?.meanError,
+    baselineHotPixelRatio: base.difference?.hotPixelRatio,
+    selectedHotPixelRatio: best.difference?.hotPixelRatio,
+    baselinePaths: base.paths,
+    selectedPaths: best.paths,
+    baselineNodes: base.nodes,
+    selectedNodes: best.nodes,
+    maxAllowedPaths: Math.ceil(base.paths * optimizer.maxPathGrowth),
+    maxAllowedNodes: Math.ceil(base.nodes * optimizer.maxNodeGrowth),
+    maxAllowedNodesStrong: Math.ceil(base.nodes * optimizer.maxNodeGrowthStrong),
+    candidateSummaries: results.map((result) => ({
+      name: result.candidate.name,
+      label: result.candidate.label,
+      edgeWeightedRmse: result.difference?.edgeWeightedRmse,
+      meanError: result.difference?.meanError,
+      hotPixelRatio: result.difference?.hotPixelRatio,
+      backgroundContaminationRatio: result.difference?.backgroundContaminationRatio,
+      paths: result.paths,
+      nodes: result.nodes,
+      error: result.difference?.error
+    }))
+  };
+
+  best.traced.paletteOptimization = stats;
+  return best.traced;
+}
+
 function runBackgroundDetach(imageData, options = {}) {
   const mode = options.backgroundDetach || "off";
   if (mode === "off") return backgroundDetachNoOp(imageData, mode, "off");
@@ -5059,10 +5484,23 @@ async function runTracePipeline(inputImageData, referenceImageData, traceOptions
   const effectQuantized = coverageRecovered.enabled && pipelineOptions.effects === "preserve"
     ? quantizeImage(filtered.imageData, colors, Math.min(iterations, 8))
     : quantized;
+  const segSource = filtered.imageData;
+  let paletteLadder = null;
+  let routerDecision = null;
+  let effectiveEngine = selectorState.engine;
 
-  if (selectorState.engine === "coverage") {
+  if (selectorState.engine === "auto") {
+    paletteLadder = computePaletteLadder(segSource, paletteLadderOptions(coverageRecovered.coverageField));
+    routerDecision = autoRouteFromPaletteLadder(paletteLadder);
+    effectiveEngine = routerDecision.selectedEngine;
+  } else {
+    routerDecision = forcedRouteDecision(selectorState.engine);
+  }
+
+  if (effectiveEngine === "coverage") {
     const coverageTraced = traceWithCoverageEngine(coverageRecovered, quantized, traceBackgroundColor, pipelineOptions);
     coverageTraced.pathCount = countSvgElements(coverageTraced.svg, "path");
+    coverageTraced.routerDecision = routerDecision;
     return {
       traced: coverageTraced,
       cleaned,
@@ -5076,14 +5514,33 @@ async function runTracePipeline(inputImageData, referenceImageData, traceOptions
     };
   }
 
-  if (selectorState.engine === "palette") {
-    const segSource = filtered.imageData;
-    const ladder = computePaletteLadder(segSource, { maxK: 16 });
-    const regions = buildPaletteRegions(segSource, ladder.chosen.palette, { minArea: 6 });
-    const paletteTraced = traceRegionsToSvg(regions, pipelineOptions, segSource);
+  if (effectiveEngine === "palette") {
+    const ladder = paletteLadder || computePaletteLadder(segSource, paletteLadderOptions(coverageRecovered.coverageField));
+    const paletteTraced = await optimizePaletteTrace(segSource, referenceImageData, {
+      ...pipelineOptions,
+      backgroundColor: traceBackgroundColor
+    }, ladder);
     paletteTraced.pathCount = countSvgElements(paletteTraced.svg, "path");
     paletteTraced.engineName = "Palette engine";
-    paletteTraced.paletteInfo = { k: ladder.chosen.k, residual: ladder.chosen.residual, colors: ladder.chosen.palette.map(rgbToHex) };
+    paletteTraced.routerDecision = routerDecision;
+    paletteTraced.paletteInfo = {
+      k: ladder.chosen.k,
+      residual: ladder.chosen.residual,
+      fullResidual: ladder.chosen.fullResidual,
+      coreResidual: ladder.chosen.coreResidual,
+      selectionResidual: ladder.chosen.selectionResidual,
+      colors: ladder.chosen.palette.map(rgbToHex),
+      forcedK: devOptions.paletteForceK,
+      selection: ladder.selection,
+      ladder: ladder.ladder.map((entry) => ({
+        k: entry.k,
+        residual: entry.residual,
+        fullResidual: entry.fullResidual,
+        coreResidual: entry.coreResidual,
+        selectionResidual: entry.selectionResidual,
+        colors: entry.palette.map(rgbToHex)
+      }))
+    };
     return {
       traced: paletteTraced,
       cleaned,
@@ -5097,9 +5554,9 @@ async function runTracePipeline(inputImageData, referenceImageData, traceOptions
     };
   }
 
-  if (selectorState.engine === "regions") {
-    const segSource = filtered.imageData;
+  if (effectiveEngine === "regions") {
     const regionTraced = await optimizeRegionTrace(segSource, referenceImageData, pipelineOptions, traceBackgroundColor);
+    regionTraced.routerDecision = routerDecision;
     return {
       traced: regionTraced,
       cleaned,
@@ -5115,20 +5572,21 @@ async function runTracePipeline(inputImageData, referenceImageData, traceOptions
 
   let traced;
   try {
-    if (selectorState.engine === "vtracer") {
+    if (effectiveEngine === "vtracer") {
       traced = await traceWithVTracer(traceImageData, quantized, pipelineOptions);
-    } else if (selectorState.engine === "imagetracer") {
+    } else if (effectiveEngine === "imagetracer") {
       traced = traceWithImageTracer(traceImageData, quantized, colors, pipelineOptions);
     } else {
       traced = traceToSvg(quantized, pipelineOptions);
     }
   } catch (error) {
     traced = traceToSvg(quantized, pipelineOptions);
-    traced.engineName = `${engineLabels[selectorState.engine] || "Selected engine"} failed; ${engineLabels.experimental} fallback`;
+    traced.engineName = `${engineLabels[effectiveEngine] || "Selected engine"} failed; ${engineLabels.experimental} fallback`;
     traced.error = error.message;
   }
 
   traced.engineName ||= engineLabels.experimental;
+  traced.routerDecision = routerDecision;
   const softEffects = buildSoftEffectLayer(effectQuantized, pipelineOptions);
   if (softEffects.fragment) {
     traced.svg = injectSvgFragment(traced.svg, softEffects.fragment);
@@ -5445,6 +5903,15 @@ async function traceCurrentImage() {
       );
     }
   }
+  if (traced.routerDecision) {
+    const route = traced.routerDecision;
+    const autoDetail = route.mode === "auto"
+      ? `; k=${route.paletteK || "n/a"}, core ${formatNumber(route.coreResidual)}, full ${formatNumber(route.fullResidual)}, transition ${((route.transitionPixelRatio || 0) * 100).toFixed(1)}%`
+      : "";
+    logLines.push(
+      `Auto router: ${route.mode === "auto" ? "selected" : "forced"} ${route.selectedEngineLabel || route.selectedEngine || "engine"} (${route.reason || "no reason"}${autoDetail})`
+    );
+  }
   if (traced.regionOptimization) {
     const region = traced.regionOptimization;
     logLines.push(
@@ -5453,6 +5920,34 @@ async function traceCurrentImage() {
     );
     if (Array.isArray(region.candidateSummaries)) {
       logLines.push(`Region candidates: ${region.candidateSummaries.map((candidate) => `${candidate.name} edge ${(Number.isFinite(candidate.edgeWeightedRmse) ? candidate.edgeWeightedRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(candidate.hotPixelRatio) ? candidate.hotPixelRatio * 100 : 0).toFixed(1)}%, paths ${candidate.paths}`).join("; ")}`);
+    }
+  }
+  if (traced.paletteInfo) {
+    const palette = traced.paletteInfo;
+    const selectionMode = palette.selection?.mode || "full-image";
+    const residualNote = Number.isFinite(palette.coreResidual)
+      ? `, core residual ${formatNumber(palette.coreResidual)}, full residual ${formatNumber(palette.fullResidual)}`
+      : "";
+    logLines.push(
+      `Palette engine: k=${palette.k}${Number.isFinite(palette.forcedK) ? ` (forced ${palette.forcedK})` : ""}, ${selectionMode} residual ${formatNumber(palette.selectionResidual || palette.residual)}${residualNote}, colors ${Array.isArray(palette.colors) ? palette.colors.join(", ") : "n/a"}`
+    );
+    if (palette.selection?.aaAware) {
+      logLines.push(
+        `Palette AA selection: downweighted ${palette.selection.transitionPixels || 0} transition pixels (${((palette.selection.transitionPixelRatio || 0) * 100).toFixed(1)}%), coverage samples ${palette.selection.coverageMarked || 0}, contrast samples ${palette.selection.contrastMarked || 0}, weight ${formatNumber(palette.selection.transitionWeight || 0)}`
+      );
+    }
+  }
+  if (traced.paletteOptimization) {
+    const paletteOpt = traced.paletteOptimization;
+    const compactNote = Number.isFinite(paletteOpt.nodePreferenceEdgeBand)
+      ? `; best edge ${paletteOpt.bestEdgeCandidate || paletteOpt.selectedCandidate}, compact band +${(paletteOpt.nodePreferenceEdgeBand * 100).toFixed(2)} pts`
+      : "";
+    logLines.push(
+      `Palette boundary optimizer: ${paletteOpt.selected ? `selected ${paletteOpt.selectedCandidate}` : "kept base"} after ${paletteOpt.candidatesTested || 0} candidates (${paletteOpt.guardReason || "no guard reason"}${compactNote})`,
+      `Palette boundary metrics: edge ${(Number.isFinite(paletteOpt.baselineEdgeRmse) ? paletteOpt.baselineEdgeRmse * 100 : 0).toFixed(2)}% -> ${(Number.isFinite(paletteOpt.selectedEdgeRmse) ? paletteOpt.selectedEdgeRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(paletteOpt.baselineHotPixelRatio) ? paletteOpt.baselineHotPixelRatio * 100 : 0).toFixed(1)}% -> ${(Number.isFinite(paletteOpt.selectedHotPixelRatio) ? paletteOpt.selectedHotPixelRatio * 100 : 0).toFixed(1)}%, paths ${paletteOpt.baselinePaths || 0} -> ${paletteOpt.selectedPaths || 0}, nodes ${paletteOpt.baselineNodes || 0} -> ${paletteOpt.selectedNodes || 0}`
+    );
+    if (Array.isArray(paletteOpt.candidateSummaries)) {
+      logLines.push(`Palette boundary candidates: ${paletteOpt.candidateSummaries.map((candidate) => `${candidate.name} edge ${(Number.isFinite(candidate.edgeWeightedRmse) ? candidate.edgeWeightedRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(candidate.hotPixelRatio) ? candidate.hotPixelRatio * 100 : 0).toFixed(1)}%, paths ${candidate.paths}, nodes ${candidate.nodes}`).join("; ")}`);
     }
   }
   if (differenceStats && !differenceStats.error) {
@@ -5575,6 +6070,7 @@ function downloadSvg() {
 fileInput.addEventListener("change", () => loadFile(fileInput.files[0]));
 sampleButton.addEventListener("click", () => loadImageUrl("./assets/sample-logo.png", "sample-logo.png"));
 if (shadedButton) shadedButton.addEventListener("click", () => loadImageUrl("./assets/shaded-test.png", "shaded-test.png"));
+if (bocButton) bocButton.addEventListener("click", () => loadImageUrl("./assets/boc-logo-small.png", "boc-logo-small.png"));
 traceButton.addEventListener("click", () => {
   traceCurrentImage().catch((error) => {
     traceInProgress = false;
@@ -5672,8 +6168,10 @@ loadBenchmarkStore();
 // Dev override: ?engine=palette|regions|coverage|imagetracer to force an engine for testing.
 // (No user-facing engine selector; the auto-router will choose in production — see WORKLOG spec.)
 try {
-  const devEngine = new URLSearchParams(location.search).get("engine");
+  const devEngine = readQueryParam("engine");
   if (devEngine && engineLabels[devEngine]) selectorState.engine = devEngine;
+  devOptions.paletteForceK = readQueryNumber("paletteK", 2, 16);
+  devOptions.paletteOptimize = readQueryParam("paletteOptimize") !== "off";
 } catch (e) { /* ignore */ }
 applySelectorState();
 renderBenchmarkLedger();
