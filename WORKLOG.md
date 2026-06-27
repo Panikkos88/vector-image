@@ -124,9 +124,11 @@ boundary + Bezier code. Target: BOC 12.6% -> ~3%. Keep SLIC/gradient path for SH
 app/assets/vm-nscar.svg, research/vm-boc-segmentation.png.
 
 ## PALETTE ENGINE SPEC (next major build) — 2026-06-26 [claude]  *** START HERE ***
-GOAL: a new engine for FLAT logos that mirrors VM's path and closes the gap (BOC 12.6% -> ~3%
-edge; NS CAR 7.5% -> ~3%). Build as a NEW engine option ("Palette engine") alongside the
-Region engine so nothing existing breaks. Verify each step vs app/assets/vm-boc.svg +
+GOAL: close the VM gap on FLAT logos (BOC 12.6% -> ~3% edge; NS CAR 7.5% -> ~3%) by building a
+PALETTE ENGINE, and ship it behind an AUTO ROUTER so the user never picks an engine (VM-style).
+Deliverable = "Palette Engine v1 + Auto Router v1 TOGETHER" (not a user-facing engine button).
+Build the palette engine internally first (steps 1-4), keep the Region engine for shaded art,
+then wire the router (step 5). Nothing existing breaks; engine choice leaves the user UI. Verify each step vs app/assets/vm-boc.svg +
 vm-nscar.svg using measureSvgDifference. Do it in small commits, browser-verified each time.
 Reuse existing: loopToSmoothSubpath (sub-pixel Bezier finish), extractIsoSegments/
 linkSegmentsIntoLoops (contour), measureSvgDifference (guard/benchmark), fitRegionAdaptive
@@ -161,10 +163,21 @@ STEP 4 — Trace + finish (reuse existing).
   - ACCEPTANCE (the target): BOC edge <= ~4% at <= ~60 paths; NS CAR <= ~4%. Compare to VM
     2.41%/2.91%. If close, this is the flat-logo engine.
 
-STEP 5 — Content-adaptive routing.
-  - Quick classifier: flat vs shaded/photo (e.g. palette-ladder elbow k is small + low residual
-    => flat; high k / smooth gradients => shaded). Route flat -> Palette engine, shaded ->
-    Region engine (which already wins on the spheres/NS-CAR-shading).
+STEP 5 — AUTO ROUTER v1 (build TOGETHER with the Palette engine; product decision 2026-06-26 user).
+  PRODUCT RULE: user does NOT choose an engine. The app auto-detects image type and routes.
+  Show only result + a small status, e.g. "Detected: Flat logo artwork / Mode: Clean palette trace".
+  Remove the engine selector from the user UI; keep a HIDDEN dev override (e.g. ?engine= or a dev
+  flag) for testing/benchmarking only.
+  CLASSIFIER (cheap, reuse the palette ladder already computed in STEP 1 — no extra pass):
+    - flat logo  -> small elbow k with LOW quantization residual + hard edges  -> PALETTE engine
+    - shaded/metallic/glow -> small k fails (residual stays high) but tones are smooth/continuous
+      (low local gradient variance across regions) -> REGION engine (already wins on NS CAR/spheres)
+    - photo/scan/complex -> high residual even at large k / high color entropy everywhere ->
+      WARN ("not ideal for clean logo vectorization yet"); real photo engine is future (#7).
+  Start with simple thresholds; TUNE against a small labeled set: BOC=flat, NS CAR=shaded, +1 photo.
+  Optional later: self-check fallback (if chosen engine's measured edge error is poor, try the other).
+  Routing must be do-no-harm: if unsure, prefer the engine that historically scores better for that
+  signal; never worse than today's region-only default.
 
 STEP 6 — Standing VM benchmark harness.
   - Script/page action: for each test logo, measure our output vs the VM reference SVG and the
