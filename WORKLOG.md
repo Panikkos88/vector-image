@@ -385,6 +385,24 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-27 [claude] DARK-GLOW investigation (no code change) — "A" is harder than estimated;
+  cheap/medium fixes verified NOT to reach VM. Precise diagnosis:
+    * Image = logo on black with a soft RADIAL GLOW/halo behind irregular text, fading to black.
+    * VM models the glow with ~25 targeted dark-teal tonal BANDS (66 paths, 0 gradients, MAE 0.09%).
+    * Ours k=3: glow tones collapse into the black bg region (317k px, color [3,12,18]).
+    * Higher k DISPROVEN: k=16 -> MAE 1.92% (~same as k3 2.04%), edge 4.76% (worse), 90 paths.
+      k-means allocates centers to dominant colors; the minority glow tones never get fine bands.
+    * Gradient-fill ROOT CAUSE found: the bg region's fitRegionAdaptive residual is SSE/px=13.2,
+      JUST under the flat-fill early-return threshold (14) -> it never tries a gradient -> flat
+      glow -> the MAE. Lowering that shared threshold is risky (would re-bloat fine-text/others).
+    * Even a single radial gradient would only partially help (glow is subtle + not truly radial);
+      won't reach VM's 0.09%.
+  REAL fix (deliberate feature, not a quick win): GLOW-TARGETED TONAL BANDING — detect the smooth
+  dark background and quantize ITS tonal range into N bands (VM-style), independent of the global
+  k-means; OR a dedicated radial-gradient background layer. Both are real builds with uncertain
+  payoff vs VM. Recommend scheduling, not hacking the shared threshold.
+  STATUS: outline (thin-stroke precision), dark-glow (glow banding), metal (shaded mesh) are ALL
+  confirmed hard engine-quality problems. BOC + fine-text match VM; those were the cheap wins.
 - 2026-06-27 [claude] ROUTING INVESTIGATION (no code change) — both cheap-routing hypotheses
   DISPROVEN by cross-engine tests; the auto-router is already correct. Do NOT retry these:
     outline-shield: Palette 14.75% edge vs Region 13.03% (router picks Region = the less-bad).
