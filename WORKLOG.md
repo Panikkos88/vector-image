@@ -385,6 +385,21 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-27 [claude] ROUTING INVESTIGATION (no code change) — both cheap-routing hypotheses
+  DISPROVEN by cross-engine tests; the auto-router is already correct. Do NOT retry these:
+    outline-shield: Palette 14.75% edge vs Region 13.03% (router picks Region = the less-bad).
+      Both ~7x VM (1.90%) because it's THIN STROKES — sub-pixel error is huge vs a ~2px stroke.
+      This is a precision problem, not routing.
+    dark-glow: Palette 3.86% edge / MAE 2.04% vs Region 12.88% / MAE 2.45% (router picks Palette,
+      correct). Palette flat-fills band the smooth glow; Region's gradients didn't trigger.
+  CONCLUSION: remaining benchmark gaps are ENGINE-QUALITY, not routing. Real next targets:
+    (A) dark-glow color modeling: give SMOOTH palette regions a radial/linear gradient fill
+        (reuse fitRegionAdaptive logic in the palette path) so the glow stops banding (MAE
+        2.04 -> ~0.1 target). Most self-contained next win.
+    (B) thin-stroke precision for outline (both engines): hard; needs stroke-aware handling
+        or much tighter sub-pixel placement on narrow regions.
+    (C) metal/gradient shaded modeling: hardest (VM uses ~88 tonal bands); gradient-mesh-ish.
+  Verified on localhost:8011 via ?engine= overrides; no files changed; live build unchanged.
 - 2026-06-27 [claude] Fine-text Palette fix: AA-fringe step-down in palette k-selection.
   Files: app/app.js NEW `paletteFringeCount`; rewrote `selectPaletteLadderEntry` to step down
   to the largest fringe-free palette when the chosen one contains a blend (AA edge) color.
