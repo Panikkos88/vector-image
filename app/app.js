@@ -5126,34 +5126,72 @@ function buildPaletteTransitionMask(imageData, coverageField = [], options = {})
   };
 }
 
+// Count palette colors that are just a linear blend of two OTHER palette colors — i.e. the
+// anti-aliased edge tone between two real colors (e.g. light-blue between teal and white).
+// Such "fringe" colors are redundant and, if promoted to a real color, spawn sliver regions.
+function paletteFringeCount(palette) {
+  let count = 0;
+  for (let i = 0; i < palette.length; i += 1) {
+    const c = palette[i];
+    let fringe = false;
+    for (let a = 0; a < palette.length && !fringe; a += 1) {
+      for (let b = a + 1; b < palette.length; b += 1) {
+        if (a === i || b === i) continue;
+        const A = palette[a];
+        const B = palette[b];
+        const abx = B[0] - A[0];
+        const aby = B[1] - A[1];
+        const abz = B[2] - A[2];
+        const len2 = abx * abx + aby * aby + abz * abz;
+        if (len2 < 40 * 40) continue; // anchors too similar to define a blend axis
+        const t = ((c[0] - A[0]) * abx + (c[1] - A[1]) * aby + (c[2] - A[2]) * abz) / len2;
+        if (t <= 0.15 || t >= 0.85) continue; // not between the two anchors
+        const px = A[0] + abx * t;
+        const py = A[1] + aby * t;
+        const pz = A[2] + abz * t;
+        if (Math.hypot(c[0] - px, c[1] - py, c[2] - pz) < 18) { fringe = true; break; }
+      }
+    }
+    if (fringe) count += 1;
+  }
+  return count;
+}
+
 function selectPaletteLadderEntry(ladder, options = {}) {
   const residualKey = "selectionResidual";
   const aaAware = Boolean(options.aaAware);
   const threshold = options.residualThreshold || (aaAware ? 12 : 9);
-  let thresholdChoice = ladder[ladder.length - 1];
+  let choice = ladder[ladder.length - 1];
   for (const entry of ladder) {
-    if (entry[residualKey] <= threshold) {
-      thresholdChoice = entry;
-      break;
+    if (entry[residualKey] <= threshold) { choice = entry; break; }
+  }
+
+  if (aaAware && ladder.length >= 3) {
+    const elbowResidual = options.elbowResidualThreshold || 16;
+    const elbowRatio = options.elbowRatio || 0.42;
+    for (let i = 1; i < ladder.length - 1; i += 1) {
+      const prev = ladder[i - 1];
+      const curr = ladder[i];
+      const next = ladder[i + 1];
+      const prevDrop = prev[residualKey] - curr[residualKey];
+      const nextDrop = curr[residualKey] - next[residualKey];
+      if (curr[residualKey] > elbowResidual) continue;
+      if (prevDrop <= 0) continue;
+      if (nextDrop <= Math.max(0.75, prevDrop * elbowRatio)) { choice = curr; break; }
     }
   }
 
-  if (!aaAware || ladder.length < 3) return thresholdChoice;
-
-  const elbowResidual = options.elbowResidualThreshold || 16;
-  const elbowRatio = options.elbowRatio || 0.42;
-  for (let i = 1; i < ladder.length - 1; i += 1) {
-    const prev = ladder[i - 1];
-    const curr = ladder[i];
-    const next = ladder[i + 1];
-    const prevDrop = prev[residualKey] - curr[residualKey];
-    const nextDrop = curr[residualKey] - next[residualKey];
-    if (curr[residualKey] > elbowResidual) continue;
-    if (prevDrop <= 0) continue;
-    if (nextDrop <= Math.max(0.75, prevDrop * elbowRatio)) return curr;
+  // AA fringe step-down: if the chosen palette includes a blend (edge) color, prefer the
+  // largest fringe-free palette below it. Stops fine-detail logos promoting the AA fringe to a
+  // real color (fine-text k=4 -> k=3: 179 paths -> 61, no sliver regions). No-op when there are
+  // no fringe colors (e.g. BOC's teal/white/yellow), so existing flat-logo picks are unchanged.
+  const ci = ladder.indexOf(choice);
+  if (ci > 0 && paletteFringeCount(choice.palette) > 0) {
+    for (let i = ci - 1; i >= 0; i -= 1) {
+      if (paletteFringeCount(ladder[i].palette) === 0) { choice = ladder[i]; break; }
+    }
   }
-
-  return thresholdChoice;
+  return choice;
 }
 
 // Weighted mean nearest-center distance of color buckets to a palette (quantization residual).
