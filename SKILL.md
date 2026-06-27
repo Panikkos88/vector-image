@@ -139,6 +139,7 @@ The output is now much closer structurally. The remaining visible weakness is an
 - Auto-router v1 is now the default user path. It computes the Palette ladder once, accepts Palette only for small clean palettes with a strong edge signal, and otherwise routes to Region. The original Auto-router proof selected Palette/k=3 for BOC at 2.60% edge RMSE, 0.27% MAE, 0.7% hot pixels, 55 paths, and about 15,835 nodes; this is superseded by compact-boundary v2 below. Local and Cloud shaded-test default/no-query runs still select Region because the palette guard rejects k=14/core residual 15.6.
 - BOC/KOINO compact-boundary v2 reaches the measured Vector Magic edge bar on the default Auto-router path. The Palette optimizer now tests sharper corner-angle candidates around `tight-corners-s12..s18`, uses a tighter compact-selection edge band, and selects `tight-corners-s18-c050`. Local and Cloud BOC runs measure 2.41% edge RMSE, 0.26% MAE, 0.7% hot pixels, 55 paths, about 13,269 nodes, and about 162 KB SVG. This matches the known VM edge reference while reducing nodes vs the prior 15,835-node output. Remaining BOC gap: MAE/hot pixels and visual QA across more flat logos.
 - Benchmark Pack v1 expands the proof loop beyond BOC/NS CAR. Generated PNGs live in `app/assets/benchmarks/`, can be loaded with hidden `?asset=assets/benchmarks/<file>.png`, and have VM fill-only references under `research/vm-benchmarks/`. The raw score file is `research/benchmark-results-2026-06-27.json`; summary is `research/benchmark-pack-v1.md`. Local and Cloud match. The pack shows the next gaps clearly: flat badge is close (ours 2.77% edge vs VM 2.51%), fine text trails (4.62% vs 2.26%), dark glow proves weak color/effect modeling (ours 2.04% MAE vs VM 0.09%), and current Region routing is much worse than VM on outline/metal samples (outline 13.03% edge vs VM 1.90%; metal 9.11% vs VM 1.79%). Transparent VM fill-only SVG needs a separate apples-to-apples transparent-background capture before using its score.
+- Dark-glow tonal banding v1 validates VM-style stacked flat tonal bands for smooth glow/shadow regions. The Palette engine detects low-luminance near-background glow pixels from the original raster, builds cumulative tonal threshold masks independent of global k-means, injects a `data-layer="tonal-band"` group after the background and before foreground paths, and keeps it only when `measureSvgDifference` improves MAE/edge/hot within complexity limits. Auto router has a narrow small-dark-glow Palette exception so this path is selected automatically. Local and Cloud `bench-dark-glow` now measure MAE 0.27%, edge RMSE 1.72%, hot 0.2%, 50 paths. VM remains better at MAE 0.09%, edge 1.04%, hot 0.09%, 66 paths, but the previous local result was MAE 2.04%, edge 3.86%, hot 0.3%, 65 paths. BOC tonal bands skip because the background is not dark enough; outline stays Region.
 - It still traces blended edge pixels as regions instead of inferring the original sub-pixel vector edge.
 - To reach Vector Magic quality, the next custom engine work must model anti-aliased edge pixels as coverage values and fit one clean boundary through them.
 
@@ -178,6 +179,7 @@ Current research notes:
 research/vectorization-methodologies-next-steps.md
 research/benchmark-pack-v1.md
 research/benchmark-results-2026-06-27.json
+research/glow-tonal-banding-v1.md
 ```
 
 Improve from flat color tracing to a hybrid vectorization pipeline:
@@ -186,7 +188,7 @@ Improve from flat color tracing to a hybrid vectorization pipeline:
 2. Add edge-preserving preprocessing in Lab color space.
 3. Move from pure palette quantization to spatial segmentation, ideally SLIC/superpixel or hierarchical region clustering.
 4. Trace merged region masks with Potrace-like contour extraction and Bezier fitting.
-5. For the BOC/KOINO flat-logo path, edge RMSE now matches the VM reference at about 2.41% with 55 paths. Do not optimize BOC edge first. Use Benchmark Pack v1: start with fine-text Palette structure/path reduction, then glow/shadow color modeling, then router behavior on outline logos that currently get sent to Region.
+5. For the BOC/KOINO flat-logo path, edge RMSE now matches the VM reference at about 2.41% with 55 paths. Do not optimize BOC edge first. Dark-glow tonal banding is now a measured win but still trails VM. Use Benchmark Pack v1 next on outline thin-stroke precision, then metal/shaded tonal mesh.
 5. Protect small text and thin details with stricter local segmentation before global smoothing/cleanup.
 5. Preserve high-angle corners while smoothing curved spans.
 6. Model anti-aliased edge pixels as sub-pixel coverage, not as separate fringe colors.

@@ -2085,9 +2085,357 @@ function buildSoftEffectLayer(quantized, options = {}) {
   };
 }
 
+function estimateBorderBackgroundColor(imageData) {
+  const { data, width, height } = imageData;
+  const samples = [];
+  const step = Math.max(1, Math.round(Math.min(width, height) / 90));
+  const pushPixel = (x, y) => {
+    const idx = (y * width + x) * 4;
+    if (data[idx + 3] < 220) return;
+    samples.push([data[idx], data[idx + 1], data[idx + 2]]);
+  };
+
+  for (let x = 0; x < width; x += step) {
+    pushPixel(x, 0);
+    pushPixel(x, height - 1);
+  }
+  for (let y = step; y < height - step; y += step) {
+    pushPixel(0, y);
+    pushPixel(width - 1, y);
+  }
+
+  if (!samples.length) return [0, 0, 0];
+  const medianChannel = (channel) => {
+    const values = samples.map((sample) => sample[channel]).sort((a, b) => a - b);
+    return values[Math.floor(values.length / 2)];
+  };
+  return [medianChannel(0), medianChannel(1), medianChannel(2)];
+}
+
+function glowTonalBandOptions(options = {}, imageData = null) {
+  const detail = options.detail || "medium";
+  const area = imageData ? imageData.width * imageData.height : 0;
+  return {
+    enabled: options.effects === "preserve" && options.antiAlias !== "off" && !options.removeLargestColor,
+    maxBands: detail === "high" ? 24 : detail === "low" ? 12 : 18,
+    minCandidateRatio: detail === "high" ? 0.006 : 0.008,
+    minBandPixels: Math.max(80, Math.round(area * (detail === "high" ? 0.0015 : detail === "low" ? 0.0035 : 0.0022))),
+    minComponentArea: Math.max(18, Math.round(area * (detail === "high" ? 0.00006 : detail === "low" ? 0.00016 : 0.0001))),
+    minLoopArea: Math.max(5, Math.round(area * 0.000012)),
+    simplifyTolerance: detail === "high" ? 0.55 : detail === "low" ? 1.1 : 0.75,
+    backgroundLumMax: 72,
+    maxGlowLum: 112,
+    maxGlowChroma: 126,
+    maxDistanceFromBackground: 118,
+    minScore: 4.2,
+    outerQuantile: 0.015,
+    innerQuantile: 0.985,
+    maxPathGrowth: 1.55,
+    maxExtraPaths: detail === "high" ? 30 : detail === "low" ? 14 : 22,
+    maxNodeGrowth: 2.6,
+    minMeanImprovement: 0.0012,
+    minStrongMeanImprovement: 0.003,
+    minEdgeImprovement: 0.00005,
+    edgeSlack: 0.0018,
+    hotPixelSlack: 0.001,
+    contaminationSlack: 0.001
+  };
+}
+
+function createSkippedTonalBandStats(reason, options = {}) {
+  return {
+    enabled: Boolean(options.enabled),
+    selected: false,
+    applied: false,
+    guardReason: reason,
+    candidatePixels: 0,
+    candidateRatio: 0,
+    bandsBuilt: 0,
+    pathsAdded: 0,
+    components: 0,
+    backgroundColor: null,
+    backgroundLum: null
+  };
+}
+
+function glowPixelScore(rgb, backgroundColor, backgroundLum, options) {
+  const lum = luminance(rgb);
+  const deltaLum = lum - backgroundLum;
+  const chroma = colorChroma(rgb);
+  const distance = Math.sqrt(colorDistanceSq(rgb, backgroundColor));
+  if (deltaLum < 2.2 || lum > options.maxGlowLum) return 0;
+  if (chroma > options.maxGlowChroma || distance > options.maxDistanceFromBackground) return 0;
+  const blueGreenLift = Math.max(0, rgb[1] - backgroundColor[1]) + Math.max(0, rgb[2] - backgroundColor[2]);
+  const score = deltaLum * 0.64 + distance * 0.36 + blueGreenLift * 0.04;
+  return score >= options.minScore ? score : 0;
+}
+
+function quantileFromSorted(sorted, q) {
+  if (!sorted.length) return 0;
+  const index = clamp(Math.round((sorted.length - 1) * q), 0, sorted.length - 1);
+  return sorted[index];
+}
+
+function uniqueAscendingThresholds(values, maxBands, options) {
+  const thresholds = [];
+  const bands = Math.max(2, maxBands);
+  for (let index = 0; index < bands; index += 1) {
+    const q = options.outerQuantile + (options.innerQuantile - options.outerQuantile) * (index / Math.max(1, bands - 1));
+    const threshold = quantileFromSorted(values, q);
+    if (!thresholds.length || threshold - thresholds[thresholds.length - 1] >= 0.65) thresholds.push(threshold);
+  }
+  return thresholds;
+}
+
+function averageBandColor(imageData, scores, lower, upper, fallbackColor) {
+  const data = imageData.data;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+
+  for (let pixel = 0, index = 0; index < data.length; pixel += 1, index += 4) {
+    const score = scores[pixel];
+    if (score < lower || score >= upper) continue;
+    r += data[index];
+    g += data[index + 1];
+    b += data[index + 2];
+    count += 1;
+  }
+
+  if (!count) return fallbackColor;
+  return [r / count, g / count, b / count];
+}
+
+function buildThresholdMask(scores, width, threshold) {
+  const labels = new Int32Array(scores.length);
+  for (let index = 0; index < scores.length; index += 1) {
+    labels[index] = scores[index] >= threshold ? 1 : 0;
+  }
+  return labels;
+}
+
+function traceTonalThreshold(scores, width, height, threshold, options) {
+  const labels = buildThresholdMask(scores, width, threshold);
+  const components = findComponentsForLabel(labels, width, height, 1, options.minComponentArea);
+  const loops = [];
+  let componentCount = 0;
+
+  for (const component of components) {
+    const boundsWidth = component.bounds.maxX - component.bounds.minX + 1;
+    const boundsHeight = component.bounds.maxY - component.bounds.minY + 1;
+    if (boundsWidth < 3 || boundsHeight < 3) continue;
+    const edges = buildEdgesForComponent(component, width);
+    const componentLoops = stitchEdges(edges, {
+      tolerance: options.simplifyTolerance,
+      minLoopArea: options.minLoopArea
+    });
+    if (!componentLoops.length) continue;
+    loops.push(...componentLoops);
+    componentCount += 1;
+  }
+
+  return {
+    d: loopsToPath(loops, { smooth: true }),
+    loopCount: loops.length,
+    componentCount
+  };
+}
+
+function buildGlowTonalBandLayer(imageData, pipelineOptions = {}) {
+  const options = glowTonalBandOptions(pipelineOptions, imageData);
+  if (!options.enabled) {
+    return { fragment: "", stats: createSkippedTonalBandStats("off", options), backgroundColor: null };
+  }
+
+  const { data, width, height } = imageData;
+  const area = width * height;
+  const backgroundColor = pipelineOptions.backgroundColor || estimateBorderBackgroundColor(imageData);
+  const backgroundLum = luminance(backgroundColor);
+  if (backgroundLum > options.backgroundLumMax) {
+    return {
+      fragment: "",
+      stats: {
+        ...createSkippedTonalBandStats("background is not dark enough", options),
+        backgroundColor: rgbToHex(backgroundColor),
+        backgroundLum
+      },
+      backgroundColor
+    };
+  }
+
+  const scores = new Float32Array(area);
+  const scoreValues = [];
+  let minScore = Infinity;
+  let maxScore = 0;
+  for (let pixel = 0, index = 0; index < data.length; pixel += 1, index += 4) {
+    if (data[index + 3] < 220) continue;
+    const rgb = [data[index], data[index + 1], data[index + 2]];
+    const score = glowPixelScore(rgb, backgroundColor, backgroundLum, options);
+    if (!score) continue;
+    scores[pixel] = score;
+    scoreValues.push(score);
+    minScore = Math.min(minScore, score);
+    maxScore = Math.max(maxScore, score);
+  }
+
+  const candidateRatio = scoreValues.length / area;
+  if (candidateRatio < options.minCandidateRatio || scoreValues.length < options.minBandPixels * 3) {
+    return {
+      fragment: "",
+      stats: {
+        ...createSkippedTonalBandStats("not enough smooth dark glow pixels", options),
+        candidatePixels: scoreValues.length,
+        candidateRatio,
+        backgroundColor: rgbToHex(backgroundColor),
+        backgroundLum,
+        minScore: Number.isFinite(minScore) ? minScore : 0,
+        maxScore
+      },
+      backgroundColor
+    };
+  }
+
+  scoreValues.sort((a, b) => a - b);
+  const targetBands = clamp(Math.floor(scoreValues.length / options.minBandPixels), 4, options.maxBands);
+  const thresholds = uniqueAscendingThresholds(scoreValues, targetBands, options);
+  if (thresholds.length < 3) {
+    return {
+      fragment: "",
+      stats: {
+        ...createSkippedTonalBandStats("tonal range too narrow", options),
+        candidatePixels: scoreValues.length,
+        candidateRatio,
+        backgroundColor: rgbToHex(backgroundColor),
+        backgroundLum,
+        minScore,
+        maxScore
+      },
+      backgroundColor
+    };
+  }
+
+  const paths = [];
+  let components = 0;
+  let loops = 0;
+  for (let index = 0; index < thresholds.length; index += 1) {
+    const lower = thresholds[index];
+    const upper = thresholds[index + 1] || Infinity;
+    const color = averageBandColor(imageData, scores, lower, upper, backgroundColor);
+    const traced = traceTonalThreshold(scores, width, height, lower, options);
+    if (!traced.d) continue;
+    paths.push(`<path d="${traced.d}" fill="${rgbToHex(color)}" fill-rule="evenodd" data-layer="tonal-band" />`);
+    components += traced.componentCount;
+    loops += traced.loopCount;
+  }
+
+  if (paths.length < 2) {
+    return {
+      fragment: "",
+      stats: {
+        ...createSkippedTonalBandStats("tonal contours were too small", options),
+        candidatePixels: scoreValues.length,
+        candidateRatio,
+        backgroundColor: rgbToHex(backgroundColor),
+        backgroundLum,
+        minScore,
+        maxScore,
+        bandsBuilt: thresholds.length,
+        components
+      },
+      backgroundColor
+    };
+  }
+
+  const fragment = [
+    `<g id="layer-tonal-bands" class="tonal-band-layer" data-layer="tonal-band" data-note="Metric-guarded dark-glow tonal bands">`,
+    ...paths,
+    `</g>`
+  ].join("");
+
+  return {
+    fragment,
+    scores,
+    backgroundColor,
+    stats: {
+      enabled: true,
+      selected: false,
+      applied: true,
+      guardReason: "candidate built",
+      backgroundColor: rgbToHex(backgroundColor),
+      backgroundLum,
+      candidatePixels: scoreValues.length,
+      candidateRatio,
+      minScore,
+      maxScore,
+      bandsBuilt: thresholds.length,
+      pathsAdded: paths.length,
+      components,
+      loops,
+      minComponentArea: options.minComponentArea,
+      simplifyTolerance: options.simplifyTolerance
+    }
+  };
+}
+
 function injectSvgFragment(svg, fragment) {
   if (!fragment) return svg;
   return svg.replace(/<\/svg>\s*$/i, `${fragment}</svg>`);
+}
+
+function tonalBackgroundElement(element, backgroundColor, viewWidth, viewHeight) {
+  const tag = element.tagName.toLowerCase();
+  if (tag === "g" && element.getAttribute("data-layer") === "background") return true;
+  if (!["rect", "path"].includes(tag)) return false;
+
+  const rgb = svgElementFillRgb(element);
+  if (!rgb || colorDistanceSq(rgb, backgroundColor) > 36 * 36) return false;
+  if (tag === "rect") {
+    const width = Number(element.getAttribute("width"));
+    const height = Number(element.getAttribute("height"));
+    return width >= viewWidth * 0.9 && height >= viewHeight * 0.9;
+  }
+
+  const bounds = pathDataBounds(element.getAttribute("d") || "");
+  if (!bounds) return elementLooksLikeBackground(element, backgroundColor, viewWidth, viewHeight);
+  return bounds.width >= viewWidth * 0.82 && bounds.height >= viewHeight * 0.82;
+}
+
+function injectTonalBandLayer(svg, fragment, backgroundColor) {
+  if (!fragment) return svg;
+  const parser = new DOMParser();
+  const documentRef = parser.parseFromString(svg, "image/svg+xml");
+  const parserError = documentRef.querySelector("parsererror");
+  const root = documentRef.documentElement;
+  if (parserError || !root || root.tagName.toLowerCase() !== "svg") return svg;
+
+  const wrapper = documentRef.createElementNS("http://www.w3.org/2000/svg", "g");
+  wrapper.innerHTML = fragment;
+  const layer = wrapper.firstElementChild;
+  if (!layer) return svg;
+
+  const viewBox = (root.getAttribute("viewBox") || "").split(/\s+/).map(Number);
+  const viewWidth = Number(root.getAttribute("width")) || viewBox[2] || 0;
+  const viewHeight = Number(root.getAttribute("height")) || viewBox[3] || 0;
+  let insertAfter = null;
+  let firstGraphic = null;
+
+  for (const child of Array.from(root.childNodes)) {
+    if (child.nodeType !== 1) continue;
+    const tag = child.tagName.toLowerCase();
+    if (tag === "defs" || tag === "style" || tag === "metadata") continue;
+    if (!firstGraphic) firstGraphic = child;
+    if (tonalBackgroundElement(child, backgroundColor, viewWidth, viewHeight)) {
+      insertAfter = child;
+      continue;
+    }
+    break;
+  }
+
+  root.insertBefore(layer, insertAfter ? insertAfter.nextSibling : firstGraphic);
+  root.setAttribute("data-tonal-banding", "dark-glow-v1");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(root)}`;
 }
 
 function injectDetachedBackgroundLayer(svg, backgroundLayer) {
@@ -3967,6 +4315,7 @@ function buildBenchmarkRun(context) {
     backgroundDetach: compactObject(traced.backgroundDetach),
     paletteInfo: compactObject(traced.paletteInfo),
     paletteOptimization: compactObject(traced.paletteOptimization),
+    tonalBanding: compactObject(traced.tonalBanding),
     regionEngine: compactObject(traced.regionEngine),
     regionOptimization: compactObject(traced.regionOptimization),
     subPixelEdges: compactObject(traced.subPixelEdges),
@@ -5302,11 +5651,24 @@ function autoRouteFromPaletteLadder(ladder) {
   const transitionRatio = selection.transitionPixelRatio || 0;
   const selectedResidual = Number.isFinite(chosen.selectionResidual) ? chosen.selectionResidual : Infinity;
   const fullResidual = Number.isFinite(chosen.fullResidual) ? chosen.fullResidual : Infinity;
+  const colors = Array.isArray(chosen.palette) ? chosen.palette : [];
+  const backgroundColor = colors[0] || [255, 255, 255];
+  const backgroundLum = luminance(backgroundColor);
+  const hasBrightShape = colors.some((color) => luminance(color) > Math.max(140, backgroundLum + 95));
+  const hasSaturatedShape = colors.some((color) => colorChroma(color) > 120 && luminance(color) > backgroundLum + 35);
   const smallPalette = chosen.k <= 4;
   const coreFits = selectedResidual <= 12.5;
   const fullFits = fullResidual <= 18;
   const edgeSignal = transitionRatio >= 0.006 && transitionRatio <= 0.22;
-  const paletteLikely = smallPalette && coreFits && fullFits && edgeSignal;
+  const darkGlowPaletteLikely = smallPalette &&
+    !coreFits &&
+    selectedResidual <= 19 &&
+    fullFits &&
+    edgeSignal &&
+    backgroundLum < 28 &&
+    hasBrightShape &&
+    hasSaturatedShape;
+  const paletteLikely = (smallPalette && coreFits && fullFits && edgeSignal) || darkGlowPaletteLikely;
   const selectedEngine = paletteLikely ? "palette" : "regions";
   const failed = [];
   if (!smallPalette) failed.push(`k ${chosen.k || "n/a"} > 4`);
@@ -5318,7 +5680,9 @@ function autoRouteFromPaletteLadder(ladder) {
     mode: "auto",
     selectedEngine,
     selectedEngineLabel: engineLabels[selectedEngine],
-    reason: paletteLikely ? "small clean palette with strong edge signal" : `palette guard failed: ${failed.join(", ") || "not flat-logo-like"}`,
+    reason: paletteLikely
+      ? darkGlowPaletteLikely ? "small dark-glow palette with strong edge signal" : "small clean palette with strong edge signal"
+      : `palette guard failed: ${failed.join(", ") || "not flat-logo-like"}`,
     paletteK: chosen.k,
     selectionResidual: chosen.selectionResidual,
     coreResidual: chosen.coreResidual,
@@ -5327,7 +5691,8 @@ function autoRouteFromPaletteLadder(ladder) {
     transitionPixels: selection.transitionPixels || 0,
     bucketCount: selection.bucketCount || 0,
     selectionBucketCount: selection.selectionBucketCount || 0,
-    colors: Array.isArray(chosen.palette) ? chosen.palette.map(rgbToHex) : []
+    darkGlowPaletteLikely,
+    colors: colors.map(rgbToHex)
   };
 }
 
@@ -5520,6 +5885,125 @@ function selectPaletteBoundaryResult(results, optimizer) {
   return { best, bestEdge, edgeBandLimit };
 }
 
+function tonalBandCandidatePassesGuard(candidate, base, optimizer) {
+  if (!candidate.difference || candidate.difference.error || !base.difference || base.difference.error) return false;
+  const meanImprovement = base.difference.meanError - candidate.difference.meanError;
+  const edgeDelta = candidate.difference.edgeWeightedRmse - base.difference.edgeWeightedRmse;
+  const hotDelta = candidate.difference.hotPixelRatio - base.difference.hotPixelRatio;
+  const contaminationDelta = candidate.difference.backgroundContaminationRatio - base.difference.backgroundContaminationRatio;
+  const maxPaths = Math.min(
+    Math.ceil(base.paths * optimizer.maxPathGrowth),
+    base.paths + optimizer.maxExtraPaths
+  );
+  const pathOk = candidate.paths <= maxPaths;
+  const nodeOk = candidate.nodes <= Math.ceil(base.nodes * optimizer.maxNodeGrowth);
+  const edgeWin = edgeDelta < -optimizer.minEdgeImprovement;
+  const strongMeanWin = meanImprovement >= optimizer.minStrongMeanImprovement && edgeDelta <= optimizer.edgeSlack;
+  const meanWin = meanImprovement >= optimizer.minMeanImprovement && edgeDelta <= optimizer.edgeSlack * 0.55;
+
+  return pathOk &&
+    nodeOk &&
+    hotDelta <= optimizer.hotPixelSlack &&
+    contaminationDelta <= optimizer.contaminationSlack &&
+    (edgeWin || strongMeanWin || meanWin);
+}
+
+function tonalBandGuardFailures(candidate, base, optimizer) {
+  const failures = [];
+  if (!candidate.difference || candidate.difference.error || !base.difference || base.difference.error) return ["difference unavailable"];
+  const meanImprovement = base.difference.meanError - candidate.difference.meanError;
+  const edgeDelta = candidate.difference.edgeWeightedRmse - base.difference.edgeWeightedRmse;
+  const hotDelta = candidate.difference.hotPixelRatio - base.difference.hotPixelRatio;
+  const contaminationDelta = candidate.difference.backgroundContaminationRatio - base.difference.backgroundContaminationRatio;
+  const maxPaths = Math.min(
+    Math.ceil(base.paths * optimizer.maxPathGrowth),
+    base.paths + optimizer.maxExtraPaths
+  );
+  if (candidate.paths > maxPaths) failures.push("path growth");
+  if (candidate.nodes > Math.ceil(base.nodes * optimizer.maxNodeGrowth)) failures.push("node growth");
+  if (hotDelta > optimizer.hotPixelSlack) failures.push("hot pixels");
+  if (contaminationDelta > optimizer.contaminationSlack) failures.push("background contamination");
+  if (!(edgeDelta < -optimizer.minEdgeImprovement ||
+    (meanImprovement >= optimizer.minStrongMeanImprovement && edgeDelta <= optimizer.edgeSlack) ||
+    (meanImprovement >= optimizer.minMeanImprovement && edgeDelta <= optimizer.edgeSlack * 0.55))) {
+    failures.push("insufficient visual-error improvement");
+  }
+  return failures;
+}
+
+async function optimizeGlowTonalBanding(baseTraced, referenceImageData, pipelineOptions, baseDifference, basePaths, baseNodes) {
+  const optimizer = glowTonalBandOptions(pipelineOptions, referenceImageData);
+  const layer = buildGlowTonalBandLayer(referenceImageData, pipelineOptions);
+  const base = {
+    difference: baseDifference,
+    paths: basePaths,
+    nodes: baseNodes
+  };
+  let stats = {
+    ...layer.stats,
+    maxAllowedPaths: Math.min(Math.ceil(basePaths * optimizer.maxPathGrowth), basePaths + optimizer.maxExtraPaths),
+    maxAllowedNodes: Math.ceil(baseNodes * optimizer.maxNodeGrowth),
+    baselineMeanError: baseDifference?.meanError,
+    baselineEdgeRmse: baseDifference?.edgeWeightedRmse,
+    baselineHotPixelRatio: baseDifference?.hotPixelRatio,
+    baselineBackgroundContaminationRatio: baseDifference?.backgroundContaminationRatio,
+    baselinePaths: basePaths,
+    baselineNodes: baseNodes
+  };
+
+  if (!layer.fragment) {
+    return {
+      ...baseTraced,
+      tonalBanding: stats
+    };
+  }
+
+  const candidateSvg = injectTonalBandLayer(baseTraced.svg, layer.fragment, layer.backgroundColor || pipelineOptions.backgroundColor || [0, 0, 0]);
+  const candidate = {
+    svg: candidateSvg,
+    paths: countSvgElements(candidateSvg, "path"),
+    nodes: estimateSvgPointCount(candidateSvg),
+    difference: null
+  };
+  try {
+    candidate.difference = await measureSvgDifference(referenceImageData, candidateSvg, {
+      backgroundColor: pipelineOptions.backgroundColor || layer.backgroundColor
+    });
+  } catch (error) {
+    candidate.difference = { error: error.message };
+  }
+
+  const selected = tonalBandCandidatePassesGuard(candidate, base, optimizer);
+  const failures = selected ? [] : tonalBandGuardFailures(candidate, base, optimizer);
+  stats = {
+    ...stats,
+    selected,
+    guardReason: selected
+      ? "metric guard accepted dark-glow tonal bands"
+      : `metric guard kept base trace: ${failures.join(", ") || "no gain"}`,
+    guardFailures: failures,
+    selectedMeanError: candidate.difference?.meanError,
+    selectedEdgeRmse: candidate.difference?.edgeWeightedRmse,
+    selectedHotPixelRatio: candidate.difference?.hotPixelRatio,
+    selectedBackgroundContaminationRatio: candidate.difference?.backgroundContaminationRatio,
+    selectedPaths: candidate.paths,
+    selectedNodes: candidate.nodes,
+    meanImprovement: Number.isFinite(baseDifference?.meanError) && Number.isFinite(candidate.difference?.meanError)
+      ? baseDifference.meanError - candidate.difference.meanError
+      : null,
+    edgeDelta: Number.isFinite(baseDifference?.edgeWeightedRmse) && Number.isFinite(candidate.difference?.edgeWeightedRmse)
+      ? candidate.difference.edgeWeightedRmse - baseDifference.edgeWeightedRmse
+      : null
+  };
+
+  return {
+    ...baseTraced,
+    svg: selected ? candidateSvg : baseTraced.svg,
+    pathCount: selected ? candidate.paths : baseTraced.pathCount,
+    tonalBanding: stats
+  };
+}
+
 async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptions, ladder) {
   const regions = buildPaletteRegions(segSource, ladder.chosen.palette, { minArea: 6 });
   const optimizer = {
@@ -5618,7 +6102,7 @@ async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptio
   };
 
   best.traced.paletteOptimization = stats;
-  return best.traced;
+  return optimizeGlowTonalBanding(best.traced, referenceImageData, pipelineOptions, best.difference, best.paths, best.nodes);
 }
 
 function runBackgroundDetach(imageData, options = {}) {
@@ -6111,6 +6595,24 @@ async function traceCurrentImage() {
     );
     if (Array.isArray(paletteOpt.candidateSummaries)) {
       logLines.push(`Palette boundary candidates: ${paletteOpt.candidateSummaries.map((candidate) => `${candidate.name} edge ${(Number.isFinite(candidate.edgeWeightedRmse) ? candidate.edgeWeightedRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(candidate.hotPixelRatio) ? candidate.hotPixelRatio * 100 : 0).toFixed(1)}%, paths ${candidate.paths}, nodes ${candidate.nodes}`).join("; ")}`);
+    }
+  }
+  if (traced.tonalBanding) {
+    const tonal = traced.tonalBanding;
+    const tonalStatus = tonal.applied
+      ? tonal.selected ? "selected" : "rejected"
+      : "skipped";
+    logLines.push(
+      `Dark-glow tonal bands: ${tonalStatus} (${tonal.guardReason || "no guard reason"})`,
+      `Tonal band stats: bg ${tonal.backgroundColor || "n/a"}, candidates ${tonal.candidatePixels || 0} (${((tonal.candidateRatio || 0) * 100).toFixed(1)}%), bands ${tonal.bandsBuilt || 0}, added paths ${tonal.pathsAdded || 0}, components ${tonal.components || 0}`
+    );
+    if (Number.isFinite(tonal.baselineMeanError) && Number.isFinite(tonal.selectedMeanError)) {
+      logLines.push(
+        `Tonal band guard: MAE ${(tonal.baselineMeanError * 100).toFixed(2)}% -> ${(tonal.selectedMeanError * 100).toFixed(2)}%, edge ${(tonal.baselineEdgeRmse * 100).toFixed(2)}% -> ${(tonal.selectedEdgeRmse * 100).toFixed(2)}%, hot ${(tonal.baselineHotPixelRatio * 100).toFixed(1)}% -> ${(tonal.selectedHotPixelRatio * 100).toFixed(1)}%, paths ${tonal.baselinePaths || 0} -> ${tonal.selectedPaths || 0} (max ${tonal.maxAllowedPaths || 0})`
+      );
+    }
+    if (Array.isArray(tonal.guardFailures) && tonal.guardFailures.length) {
+      logLines.push(`Tonal band guard failures: ${tonal.guardFailures.join(", ")}`);
     }
   }
   if (differenceStats && !differenceStats.error) {

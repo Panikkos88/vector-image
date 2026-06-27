@@ -1,5 +1,16 @@
 # WORKLOG
 
+> **HANDOFF -> CLAUDE/CODEX (2026-06-27 [codex]):** Dark-glow tonal banding v1 is implemented,
+> deployed, and proof-loop tested. Live Cloud = rev `vector-accuracy-studio-00013-5vc`, cache
+> `20260627-glowband2`. The Palette engine now adds a guarded dark-background tonal-band layer
+> when `effects=preserve`; Auto router has a narrow small-dark-glow exception so the benchmark
+> reaches that Palette path. Dark-glow Auto local/Cloud: MAE 0.27%, edge RMSE 1.72%, hot 0.2%,
+> 50 paths. This closes most of the previous ours-vs-VM dark-glow gap (was MAE 2.04% / edge
+> 3.86%; VM reference MAE 0.09% / edge 1.04% / 66 paths). BOC smoke remained at 2.41% edge /
+> 55 paths and tonal bands skipped; outline smoke stayed Region. Next target: outline thin-stroke
+> precision first, then metal/shaded tonal mesh. Do NOT retry dark-glow higher-k or shared
+> `fitRegionAdaptive` threshold hacks.
+
 Shared handoff log for this project. **Two agents work here: Codex and Claude.**
 They do not share memory — this file is the shared brain.
 
@@ -102,7 +113,7 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00011-lbr`, serving 100% traffic.
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00013-5vc`, serving 100% traffic.
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -154,6 +165,15 @@ BOC unchanged (2.41% / 55). k-check across the benchmark pack: only fine-text ch
 all chosen palettes fringe-free; no other regression. Deployed Cloud Run revision
 `vector-accuracy-studio-00012-wpx`, cache `20260627-finetext1`.
 
+2026-06-27 [codex]: Dark-glow tonal banding v1 shipped. The Palette engine now detects smooth
+dark-background glow pixels from the original raster, creates cumulative flat tonal-band paths
+independent of global k-means, injects them after the background and before foreground paths,
+then measures the candidate against the base Palette SVG. Auto router now has a narrow dark-glow
+Palette exception. Local and Cloud dark-glow Auto results match: MAE 0.27%, edge RMSE 1.72%,
+hot 0.2%, 50 paths. VM reference remains better at MAE 0.09% / edge 1.04% / hot 0.09% / 66 paths,
+but this is a real measured gain from the previous local MAE 2.04% / edge 3.86%. BOC smoke stayed
+Palette 55 paths / 2.41% edge and tonal bands skipped; outline smoke stayed Region.
+
 Quality is near the ceiling of the current "quantize → trace regions → patch" architecture.
 Recent post-passes (sub-pixel nudge, background detach v1/v2, micro-prune) are mostly
 **rejected by the metric guard** because they don't beat the curve-optimized baseline.
@@ -194,13 +214,16 @@ the guard usually rejects it. Reaching Vector Magic quality needs an architectur
      Bumped promote 4->6 to try to recover the win (NOT yet browser-verified — see handoff).
    - OPEN for Codex: verify promote=6 recovers the logo win at acceptable speed; if not, options =
      raise maxEvalDim (e.g. 560), or seed a tiny FULL-res local search around the eval winner.
-5. Real gradient/diffusion-curve modeling for glows/shadows (soft-effect layer is flat blur today).
+5. IN PROGRESS/DONE for dark logos: guarded dark-glow tonal banding v1 now handles the generated
+   dark-glow benchmark. Remaining glow work: generalize beyond solid black backgrounds and keep
+   the metric guard strict; do not loosen global `fitRegionAdaptive`.
 6. DONE (2026-06-27 [codex]) Auto-router v1 selects Palette for flat BOC/KOINO and Region
    for shaded/gradient content. Next routing work should expand the labeled test set beyond
    BOC + shaded-test + NS CAR before changing thresholds.
 7. DONE (2026-06-27 [codex]) Benchmark Pack v1 added and VM-referenced. It shows:
-   flat badge is close (ours 2.77% edge vs VM 2.51%), fine text trails badly
-   (4.62% vs 2.26%), glow/shadow color modeling is weak (ours 2.04% MAE vs VM 0.09%),
+   flat badge is close (ours 2.77% edge vs VM 2.51%), fine text improved after the AA-fringe fix,
+   dark glow is now much closer after tonal banding (ours 0.27% MAE / 1.72% edge vs VM
+   0.09% MAE / 1.04% edge),
    and current Region routing is much worse than VM on outline/metal samples
    (outline 13.03% edge vs VM 1.90%; metal 9.11% vs VM 1.79%).
 
@@ -209,9 +232,9 @@ the same 55 paths and fewer nodes than the prior local/cloud build. Remaining VM
 MAE/hot pixels (ours 0.26% / 0.7% vs VM about 0.17% / 0.5%) and visual QA across more
 flat-logo samples before changing router thresholds.
 
-Current next target: do not tune BOC edge further first. Use Benchmark Pack v1. Start with
-fine-text Palette structure/path reduction, then glow/shadow color modeling, then router
-threshold changes for outline logos that currently get sent to Region.
+Current next target: do not tune BOC or dark-glow first. Use Benchmark Pack v1. Start with
+outline thin-stroke precision (VM 1.90% edge vs our Region 13.03%), then metal/shaded tonal
+mesh (VM 1.79% edge vs our 9.11%). Router-only changes were already disproven for outline.
 
 **Recommended first build:** prototype items 1+3 as a NEW experimental engine alongside
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
@@ -396,6 +419,48 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-27 [codex] Dark-glow tonal banding v1 implemented, measured, and deployed.
+  Snapshot before edit: `app/app.js.bak-0627-codex-glowband1` and
+  `app/index.html.bak-0627-codex-glowband1`.
+  Files/functions touched:
+    - `app/app.js`: added `estimateBorderBackgroundColor`, `glowTonalBandOptions`,
+      `createSkippedTonalBandStats`, `glowPixelScore`, `quantileFromSorted`,
+      `uniqueAscendingThresholds`, `averageBandColor`, `buildThresholdMask`,
+      `traceTonalThreshold`, `buildGlowTonalBandLayer`, `tonalBackgroundElement`,
+      `injectTonalBandLayer`, `tonalBandCandidatePassesGuard`,
+      `tonalBandGuardFailures`, and `optimizeGlowTonalBanding`.
+    - `app/app.js`: updated `autoRouteFromPaletteLadder` with a narrow small-dark-glow Palette
+      exception; updated `optimizePaletteTrace` to run the guarded tonal candidate; updated
+      `buildBenchmarkRun` and `traceCurrentImage` to persist/log `tonalBanding`.
+    - `app/index.html`: cache-busted `app.js` to `?v=20260627-glowband2`.
+    - `WORKLOG.md`, `SKILL.md`: updated shared state, next steps, algorithm memory, and this entry.
+  Local:
+    - `npm run check` OK.
+    - Browser local Auto at `http://127.0.0.1:8787/?asset=assets/benchmarks/bench-dark-glow.png&run=codex-glowband2-local-auto`:
+      Auto selected Palette via "small dark-glow palette"; tonal bands selected; MAE 0.27%,
+      RMSE 1.00%, edge RMSE 1.72%, hot 0.2%, background contamination 0.04%, 50 paths,
+      runtime about 3.4s. Guard details: base 1.84% MAE / 2.64% edge / 0.8% hot / 47 paths ->
+      selected 0.27% / 1.72% / 0.2% / 50 paths.
+    - Local outline smoke `bench-outline-shield`: stayed Region; edge 13.03%, 26 paths.
+    - Local BOC smoke `assets/boc-logo-small.png`: stayed Palette; tonal bands skipped; edge
+      2.41%, MAE 0.26%, hot 0.7%, 55 paths.
+  VM:
+    - Existing VM dark-glow reference is `research/vm-benchmarks/bench-dark-glow-vm.svg`:
+      MAE 0.09%, edge RMSE 1.04%, hot 0.09%, 66 paths. New delta: +0.18 MAE pts and
+      +0.68 edge pts vs VM; previous local gap was +1.95 MAE pts and +2.82 edge pts.
+  Cloud:
+    - Deployed Cloud Run revision `vector-accuracy-studio-00013-5vc`, cache
+      `20260627-glowband2`.
+    - Cloud UI Auto at
+      `https://vector-accuracy-studio-709870851047.europe-west1.run.app/?asset=assets/benchmarks/bench-dark-glow.png&run=codex-glowband2-cloud-auto`:
+      same as local, MAE 0.27%, edge 1.72%, hot 0.2%, 50 paths, runtime about 3.4s.
+    - Cloud SVG preview rendered and Download SVG wrote
+      `C:\Users\panik\Downloads\bench-dark-glow-local-trace.svg` (50,694 bytes). The in-app
+      browser did not emit a `download` event for the blob URL, but the file appeared in Downloads.
+  Decision:
+    - ACCEPT. This is a real measured gain with modest complexity growth (47 -> 50 paths),
+      local and Cloud match, and BOC/outline smoke checks did not regress. Dark-glow is not fully
+      at VM yet, but the gap is now much smaller and the approach is validated.
 - 2026-06-27 [claude] CODE QA pass (read-only, no app code changed). Full report:
   `research/qa-2026-06-27-claude.md`. Result: NO bugs. Clean: syntax, no dup defs, no dead/
   debug code, guards present, default routes via auto-router. Action items for Codex:
