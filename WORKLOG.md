@@ -123,6 +123,32 @@ boundary + Bezier code. Target: BOC 12.6% -> ~3%. Keep SLIC/gradient path for SH
 (content-adaptive: flat->palette engine, shaded->region engine). Refs: app/assets/vm-boc.svg,
 app/assets/vm-nscar.svg, research/vm-boc-segmentation.png.
 
+## PALETTE ENGINE v1 — BUILT 2026-06-26 [claude] (steps 1-4 done; router=step5 still TODO)
+Implemented + integrated (dev-flagged). NEW fns in app.js: paletteResidual, kmeansPalette,
+computePaletteLadder (step1 ladder+elbow), quantizeToPalette, buildPaletteRegions (step2+3:
+quantize->per-color connected components via findComponentsForLabel -> regions object).
+Reuses traceRegionsToSvg as the finisher (step4). Engine branch "palette" in runTracePipeline;
+engineLabels.palette; DEV OVERRIDE `?engine=palette|regions|coverage|imagetracer` (no user UI
+selector — router will choose later). Fixed a crash: regionCoverageProjection now guards a
+missing neighbour color (`if(!cs)return 1`) so dropped-speckle (-1) pixels are absorbed.
+Cache `?v=20260626-palette1`. node --check OK. Snapshot app.js.bak-0626g-claude-palette.
+BOC RESULT (699x780 vs original, vs VM 2.41% edge / 55 paths):
+  auto (picked k=4): edge 11.89% / 113 paths / ~0.8s
+  forced k=3:        edge 11.23% / 55 paths  (== VM's palette + EXACT path count!)
+  MAE ~1.0%, hot ~2.6% (LOW) -> error is concentrated AT BOUNDARIES, not areas.
+KEY FINDINGS (update the diagnosis):
+  1. Palette + per-color segmentation now MATCHES VM structurally (k=3 -> 55 regions = VM's 55).
+     The palette approach is validated for flat logos. 
+  2. Edge still ~5x worse than VM despite identical structure -> the remaining lever is now
+     BOUNDARY/CURVE PRECISION (sub-pixel placement + curve fit). This REVERSES the earlier
+     "curves don't matter" note (that was measured when segmentation was wrong). Re-apply
+     Schneider (saved in app.js.bak-0626f) + tighten sub-pixel placement NOW that regions are right.
+  3. k-selection picks k=4 because the ANTI-ALIASED edge blend (#7bb2be) inflates the k=3 residual.
+     VM picks 3 and treats edges as coverage. FIX: estimate palette ignoring edge/transition
+     pixels (or treat AA as coverage), so the elbow lands on k=3 like VM.
+NEXT (revised priority): (A) boundary/curve precision on palette regions [biggest lever now],
+(B) AA-aware k selection (-> k=3), (C) then the auto-router (step 5). Target BOC 11% -> ~3%.
+
 ## PALETTE ENGINE SPEC (next major build) — 2026-06-26 [claude]  *** START HERE ***
 GOAL: close the VM gap on FLAT logos (BOC 12.6% -> ~3% edge; NS CAR 7.5% -> ~3%) by building a
 PALETTE ENGINE, and ship it behind an AUTO ROUTER so the user never picks an engine (VM-style).

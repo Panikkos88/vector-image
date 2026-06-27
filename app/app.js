@@ -82,6 +82,7 @@ const engineLabels = {
   imagetracer: "ImageTracerJS baseline",
   experimental: "Experimental tracer",
   coverage: "Coverage engine (per-loop color)",
+  palette: "Palette engine (flat-logo)",
   regions: "Region engine (SLIC + merge)"
 };
 
@@ -4318,6 +4319,7 @@ function traceWithCoverageEngine(coverageRecovered, quantized, backgroundColor, 
 // project the pixel color onto the line between region r's mean color (cr) and the
 // neighbouring region's mean color (cs). 1 = fully r, 0 = fully the neighbour, ~0.5 = the edge.
 function regionCoverageProjection(src, idx, cr, cs) {
+  if (!cs) return 1; // neighbour is an unassigned (-1) pixel -> treat as fully this region
   const dr = cr[0] - cs[0];
   const dg = cr[1] - cs[1];
   const db = cr[2] - cs[2];
@@ -4932,6 +4934,105 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
   return fullBest.traced;
 }
 
+// === PALETTE ENGINE (flat-logo path, mirrors Vector Magic) ===
+// Weighted mean nearest-center distance of color buckets to a palette (quantization residual).
+function paletteResidual(buckets, centers) {
+  let sum = 0;
+  let wsum = 0;
+  for (const b of buckets) {
+    let bd = Infinity;
+    for (const c of centers) {
+      const dr = b.rgb[0] - c[0];
+      const dg = b.rgb[1] - c[1];
+      const db = b.rgb[2] - c[2];
+      const d = dr * dr + dg * dg + db * db;
+      if (d < bd) bd = d;
+    }
+    sum += Math.sqrt(bd) * b.count;
+    wsum += b.count;
+  }
+  return wsum ? sum / wsum : 0;
+}
+
+function kmeansPalette(buckets, k, iters) {
+  let centers = initializeCenters(buckets, k);
+  for (let it = 0; it < iters; it += 1) {
+    const sums = centers.map(() => [0, 0, 0, 0]);
+    for (const b of buckets) {
+      const idx = nearestCenterIndex(b.rgb, centers);
+      const w = Math.sqrt(b.count);
+      sums[idx][0] += b.rgb[0] * w;
+      sums[idx][1] += b.rgb[1] * w;
+      sums[idx][2] += b.rgb[2] * w;
+      sums[idx][3] += w;
+    }
+    centers = centers.map((ctr, idx) => {
+      const s = sums[idx];
+      return s[3] ? [s[0] / s[3], s[1] / s[3], s[2] / s[3]] : ctr;
+    });
+  }
+  return centers.map((c) => c.map(Math.round));
+}
+
+// STEP 1: palette ladder — best palette per k, pick the elbow (smallest k that explains the image).
+function computePaletteLadder(imageData, options = {}) {
+  const buckets = buildColorBuckets(imageData.data);
+  const maxK = Math.min(options.maxK || 16, Math.max(2, buckets.length));
+  const ladder = [];
+  for (let k = 2; k <= maxK; k += 1) {
+    const palette = kmeansPalette(buckets, k, 8);
+    ladder.push({ k, palette, residual: paletteResidual(buckets, palette) });
+  }
+  const absThresh = options.residualThreshold || 9;
+  let chosen = ladder[ladder.length - 1];
+  for (const e of ladder) { if (e.residual <= absThresh) { chosen = e; break; } }
+  if (options.forceK) { const f = ladder.find((e) => e.k === options.forceK); if (f) chosen = f; }
+  return { ladder, chosen };
+}
+
+function quantizeToPalette(imageData, palette) {
+  const { data, width, height } = imageData;
+  const labels = new Int32Array(width * height);
+  for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
+    let best = 0;
+    let bd = Infinity;
+    for (let c = 0; c < palette.length; c += 1) {
+      const pc = palette[c];
+      const dr = data[i] - pc[0];
+      const dg = data[i + 1] - pc[1];
+      const db = data[i + 2] - pc[2];
+      const d = dr * dr + dg * dg + db * db;
+      if (d < bd) { bd = d; best = c; }
+    }
+    labels[p] = best;
+  }
+  return labels;
+}
+
+// STEP 2+3: quantize to palette, then per-color connected components -> regions object
+// (compatible with traceRegionsToSvg, which supplies the sub-pixel boundary + Bezier finish).
+function buildPaletteRegions(imageData, palette, options = {}) {
+  const { width, height } = imageData;
+  const minArea = options.minArea || 6;
+  const palLabels = quantizeToPalette(imageData, palette);
+  const regionLabels = new Int32Array(width * height).fill(-1);
+  const regionColor = [];
+  const regionArea = [];
+  const bbox = [];
+  let rid = 0;
+  for (let c = 0; c < palette.length; c += 1) {
+    const comps = findComponentsForLabel(palLabels, width, height, c, minArea);
+    for (const comp of comps) {
+      for (const idx of comp.pixels) regionLabels[idx] = rid;
+      regionColor[rid] = palette[c];
+      regionArea[rid] = comp.area;
+      bbox[rid] = { minX: comp.bounds.minX, minY: comp.bounds.minY, maxX: comp.bounds.maxX, maxY: comp.bounds.maxY };
+      rid += 1;
+    }
+  }
+  return { regionLabels, regionCount: rid, regionColor, regionArea, bbox, width, height };
+}
+
 function runBackgroundDetach(imageData, options = {}) {
   const mode = options.backgroundDetach || "off";
   if (mode === "off") return backgroundDetachNoOp(imageData, mode, "off");
@@ -4964,6 +5065,27 @@ async function runTracePipeline(inputImageData, referenceImageData, traceOptions
     coverageTraced.pathCount = countSvgElements(coverageTraced.svg, "path");
     return {
       traced: coverageTraced,
+      cleaned,
+      filtered,
+      coverageRecovered: { ...coverageRecovered, backgroundColor: traceBackgroundColor },
+      detailProtected,
+      quantized,
+      effectQuantized,
+      softEffects: { fragment: null, pathCount: 0, labelCount: 0 },
+      backgroundDetach
+    };
+  }
+
+  if (selectorState.engine === "palette") {
+    const segSource = filtered.imageData;
+    const ladder = computePaletteLadder(segSource, { maxK: 16 });
+    const regions = buildPaletteRegions(segSource, ladder.chosen.palette, { minArea: 6 });
+    const paletteTraced = traceRegionsToSvg(regions, pipelineOptions, segSource);
+    paletteTraced.pathCount = countSvgElements(paletteTraced.svg, "path");
+    paletteTraced.engineName = "Palette engine";
+    paletteTraced.paletteInfo = { k: ladder.chosen.k, residual: ladder.chosen.residual, colors: ladder.chosen.palette.map(rgbToHex) };
+    return {
+      traced: paletteTraced,
       cleaned,
       filtered,
       coverageRecovered: { ...coverageRecovered, backgroundColor: traceBackgroundColor },
@@ -5547,5 +5669,11 @@ exportBenchmarkButton.addEventListener("click", exportBenchmarkJson);
 clearBenchmarkButton.addEventListener("click", clearBenchmarkRuns);
 
 loadBenchmarkStore();
+// Dev override: ?engine=palette|regions|coverage|imagetracer to force an engine for testing.
+// (No user-facing engine selector; the auto-router will choose in production — see WORKLOG spec.)
+try {
+  const devEngine = new URLSearchParams(location.search).get("engine");
+  if (devEngine && engineLabels[devEngine]) selectorState.engine = devEngine;
+} catch (e) { /* ignore */ }
 applySelectorState();
 renderBenchmarkLedger();
