@@ -5531,13 +5531,18 @@ function selectPaletteLadderEntry(ladder, options = {}) {
   }
 
   // AA fringe step-down: if the chosen palette includes a blend (edge) color, prefer the
-  // largest fringe-free palette below it. Stops fine-detail logos promoting the AA fringe to a
-  // real color (fine-text k=4 -> k=3: 179 paths -> 61, no sliver regions). No-op when there are
-  // no fringe colors (e.g. BOC's teal/white/yellow), so existing flat-logo picks are unchanged.
+  // largest fringe-free palette below it — BUT only if that smaller palette is still "good"
+  // (selectionResidual within threshold). This stops fine-detail logos promoting the AA fringe
+  // to a real color (fine-text k=4 -> k=3), WITHOUT collapsing onto a palette that merges two
+  // genuinely distinct colors (outline shield: keep k=5 that separates navy interior from the
+  // dark background rather than falling back to a high-residual k=3). No-op when fringe-free.
   const ci = ladder.indexOf(choice);
   if (ci > 0 && paletteFringeCount(choice.palette) > 0) {
     for (let i = ci - 1; i >= 0; i -= 1) {
-      if (paletteFringeCount(ladder[i].palette) === 0) { choice = ladder[i]; break; }
+      if (paletteFringeCount(ladder[i].palette) !== 0) continue;
+      if (ladder[i].selectionResidual > threshold) break; // smaller palette would merge real colors
+      choice = ladder[i];
+      break;
     }
   }
   return choice;
@@ -5656,7 +5661,8 @@ function autoRouteFromPaletteLadder(ladder) {
   const backgroundLum = luminance(backgroundColor);
   const hasBrightShape = colors.some((color) => luminance(color) > Math.max(140, backgroundLum + 95));
   const hasSaturatedShape = colors.some((color) => colorChroma(color) > 120 && luminance(color) > backgroundLum + 35);
-  const smallPalette = chosen.k <= 4;
+  const smallPalette = chosen.k <= 6; // allow clean k=5/6 flat logos (e.g. outline shield);
+  // the core/full residual + edge-signal guards below still keep shaded content on Region.
   const coreFits = selectedResidual <= 12.5;
   const fullFits = fullResidual <= 18;
   const edgeSignal = transitionRatio >= 0.006 && transitionRatio <= 0.22;
@@ -5671,7 +5677,7 @@ function autoRouteFromPaletteLadder(ladder) {
   const paletteLikely = (smallPalette && coreFits && fullFits && edgeSignal) || darkGlowPaletteLikely;
   const selectedEngine = paletteLikely ? "palette" : "regions";
   const failed = [];
-  if (!smallPalette) failed.push(`k ${chosen.k || "n/a"} > 4`);
+  if (!smallPalette) failed.push(`k ${chosen.k || "n/a"} > 6`);
   if (!coreFits) failed.push(`core residual ${formatNumber(selectedResidual)} > 12.5`);
   if (!fullFits) failed.push(`full residual ${formatNumber(fullResidual)} > 18`);
   if (!edgeSignal) failed.push(`transition ${(transitionRatio * 100).toFixed(1)}% outside flat-logo band`);
