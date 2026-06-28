@@ -5766,10 +5766,56 @@ function quantizeToPalette(imageData, palette) {
 
 // STEP 2+3: quantize to palette, then per-color connected components -> regions object
 // (compatible with traceRegionsToSvg, which supplies the sub-pixel boundary + Bezier finish).
+// Dissolve anti-aliasing fringe colours into their real neighbours at the 50%-coverage line.
+// A palette like the outline shield's k=5 spends one slot on a grey cream<->dark blend; hard
+// quantization then claims the whole AA band as a thin grey region that gets dropped, letting the
+// cream flood across it (~0.5px dilation, the gap vs Vector Magic). VM instead has no fringe colour
+// and splits the AA band directly between the two real colours. This reproduces that: each
+// fringe-coloured pixel is reassigned to whichever TWO non-fringe anchors dominate its local
+// neighbourhood (so an outer cream/dark blend goes to cream|dark and an inner cream/navy blend goes
+// to cream|navy), by sub-pixel coverage. No-op when the palette is fringe-free (BOC, fine-text,
+// flat-badge, dark-glow all pass through unchanged).
+function dissolvePaletteFringe(imageData, palette, palLabels) {
+  const flags = paletteFringeFlags(palette);
+  let hasFringe = false;
+  for (let i = 0; i < flags.length; i += 1) if (flags[i]) { hasFringe = true; break; }
+  if (!hasFringe) return palLabels;
+
+  const { width, height, data } = imageData;
+  const out = palLabels.slice();
+  const radius = 2;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const p = y * width + x;
+      if (!flags[palLabels[p]]) continue;
+      const counts = new Map();
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= height) continue;
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= width) continue;
+          const lab = palLabels[yy * width + xx];
+          if (flags[lab]) continue;
+          counts.set(lab, (counts.get(lab) || 0) + 1);
+        }
+      }
+      if (counts.size === 0) continue; // surrounded by fringe -> leave for now
+      const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      const aIdx = sorted[0][0];
+      const bIdx = sorted.length > 1 ? sorted[1][0] : aIdx;
+      if (aIdx === bIdx) { out[p] = aIdx; continue; }
+      const coverageTowardB = regionCoverageProjection(data, p * 4, palette[bIdx], palette[aIdx]);
+      out[p] = coverageTowardB >= 0.5 ? bIdx : aIdx;
+    }
+  }
+  return out;
+}
+
 function buildPaletteRegions(imageData, palette, options = {}) {
   const { width, height } = imageData;
   const minArea = options.minArea || 6;
-  const palLabels = quantizeToPalette(imageData, palette);
+  const palLabels = dissolvePaletteFringe(imageData, palette, quantizeToPalette(imageData, palette));
   const regionLabels = new Int32Array(width * height).fill(-1);
   const regionColor = [];
   const regionArea = [];
