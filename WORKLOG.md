@@ -1,5 +1,27 @@
 # WORKLOG
 
+> **HANDOFF -> CODEX (2026-06-28 [claude]):** Coverage-reconstruction gain shipped — outline
+> **5.32% -> 4.07%** edge (Auto/Palette/k5). Diagnosed end-to-end (data, not guessing): the entire
+> outline gap vs VM is the cream/navy edge GEOMETRY (proved by swap test: VM's non-yellow paths +
+> our 2 yellow = 1.67%; our cream/navy + VM's 15 yellow = 5.47% — so yellow detail is a red
+> herring, our 2 yellow paths are fine). Root cause of the cream dilation: the k=5 palette has a
+> grey cream<->dark AA-blend colour; hard quantization claims the whole AA band as a thin grey
+> region that gets dropped, so cream floods across it (~0.5px outward dilation at every edge,
+> confirmed by cross-section + an over/under-coverage census: net +1487 over-covered AA px). VM has
+> no fringe colour and splits the AA band between the two real colours at the 50% line. FIX: new
+> `dissolvePaletteFringe` (in `buildPaletteRegions`) reassigns each fringe pixel to the two
+> non-fringe anchors that dominate its LOCAL neighbourhood (outer->cream|dark, inner->cream|navy)
+> by sub-pixel coverage; the existing coverage-projection trace then lands the iso-0.5 contour on
+> the true line. Result: cream now BETTER than VM (65k vs 70k err mass), net over-coverage halved
+> (+1487 -> +614), cross-section matches VM AA. NO-OP for fringe-free palettes, so BOC/fine-text/
+> flat-badge/dark-glow are byte-unaffected (verified). Tried-and-REJECTED this session (don't
+> retry): the existing sub-pixel vertex-nudge pass (`fitSvgSubPixelEdges`) on the palette output
+> (made outline WORSE 5.32->5.95); blanket morphological erosion (worse); coordinateOffset/
+> translation (can't fix symmetric dilation); using referenceImageData as the trace coverage source
+> (inert: +/-0.01pt, dropped to avoid risk to the 4 parity samples). REMAINING outline gap (4.07 vs
+> VM 1.90) is now dominated by inner cream/navy edge precision (navy err 152k vs VM 57k) + residual
+> AA — diminishing returns. Deployed: see Change Log Cloud line.
+
 > **HANDOFF -> CODEX (2026-06-28 [claude]):** Dark-glow drift FIXED — Codex's outline win is now
 > unblocked and SHIPPED. Root cause was MINE: commit `8e41bde` added a `selectionResidual`-based
 > guard to the AA-fringe step-down that was too blunt. It correctly kept outline at k=5 but also
@@ -186,9 +208,9 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00015-tq6`, serving 100% traffic
-(cache `20260628-darkglowfix1`; outline boundary-simplifier + thin-stroke + dark-glow injective
-fringe fix all live).
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00016-4cr`, serving 100% traffic
+(cache `20260628-fringedissolve1`; outline boundary-simplifier + thin-stroke + dark-glow injective
+fringe fix + AA-fringe dissolve all live).
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -527,6 +549,40 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-28 [claude] Outline coverage-reconstruction: dissolve AA-fringe colours into anchors
+  (edge 5.32% -> 4.07%). Snapshot: `app/app.js.bak-0628-claude-fringedissolve`.
+  Diagnosis (all data-driven, browser-measured against the VM SVG in our own harness):
+    - VM outline scores 1.90% edge / 30 paths in our `measureSvgDifference`; ours was 5.32% / ~18.
+    - Path-swap decomposition: VM-rest + our-yellow = 1.67%; our-rest + VM-yellow = 5.47%. => the
+      gap is 100% cream/navy edge geometry; our 2 yellow paths are adequate (VM uses 15 for the
+      same strokes/dots, but that detail is NOT where the error is).
+    - Cross-section + over/under-coverage census: our cream edges are systematically dilated ~0.5px
+      outward (net +1487 over-covered AA px vs VM's -92). Cause: the k=5 grey AA-blend colour makes
+      hard quantization claim the AA band as a thin grey region -> dropped -> cream floods it.
+  Files/functions touched:
+    - `app/app.js`: NEW `paletteFringeFlags` already existed; NEW `dissolvePaletteFringe(imageData,
+      palette, palLabels)` reassigns fringe-coloured pixels to the two dominant local non-fringe
+      anchors by `regionCoverageProjection` (50% split). Wired into `buildPaletteRegions` (one line:
+      wrap `quantizeToPalette` output). Early-returns unchanged labels when the palette is
+      fringe-free -> zero effect on fringe-free samples.
+    - `app/index.html`: cache-bust `app.js?v=20260628-fringedissolve1`.
+    - `WORKLOG.md`: handoff banner + this entry.
+  Local (Auto router, node --check OK):
+    - outline -> Palette/k5: edge 5.32% -> 4.07%, MAE 0.28%, hot 0.5%, 31 paths. cream err mass
+      now 65k (< VM 70k); net over-coverage +1487 -> +614; cross-section x139 [135,138,139] vs VM
+      [129,133,133] (was [239,239,229] full cream).
+    - No regression: dark-glow 1.72%/50, fine-text 3.20%/61, flat-badge 2.77%/31, BOC 2.41%/55,
+      metal Region 9.11%/13 (dissolve is a no-op for their fringe-free palettes).
+  VM: outline VM 1.90%/30; ours 4.07%/31 -> closed ~1.25 more edge pts (cumulative 13.03 -> 4.07
+    this project). Remaining gap is inner cream/navy edge precision (navy err 152k vs VM 57k).
+  Tried + REJECTED (kept out of the build; don't retry): existing `fitSvgSubPixelEdges` vertex-nudge
+    on palette output (5.32 -> 5.95, worse); blanket morphological erosion (worse); coordinateOffset
+    translation (can't fix symmetric dilation); referenceImageData as trace coverage source (inert).
+  Cloud: deployed rev `vector-accuracy-studio-00016-4cr`, serving 100%. Verified live that
+    `index.html` serves `app.js?v=20260628-fringedissolve1` and the deployed `app.js` contains
+    `dissolvePaletteFringe`. Functional re-run on Cloud not scripted (Claude_Preview can't drive the
+    remote); pushed build is byte-identical to the locally-proven one (commit `e3c3f89`).
+  Decision: ACCEPT. Real root-cause outline gain, zero regression elsewhere (no-op for fringe-free).
 - 2026-06-28 [claude] Dark-glow regression FIXED (fringe step-down: residual guard -> injective
   anchor mapping). Snapshot before edit: `app/app.js.bak-0628-claude-darkglowfix`.
   Root cause: my earlier commit `8e41bde` guarded the AA-fringe step-down with
