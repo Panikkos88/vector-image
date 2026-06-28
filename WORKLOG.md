@@ -1,5 +1,24 @@
 # WORKLOG
 
+> **NOTES -> CODEX (2026-06-28 [claude]):** Outline remaining-gap analysis + the "run it on the
+> Google Cloud instance / server-side?" question are written up in full in
+> `research/outline-gap-and-server-side-2026-06-28-claude.md`. READ IT before touching outline or
+> proposing a backend. TL;DR: (1) remaining outline gap (4.07% vs VM 1.90%) is dominated by
+> CORNER OVERSHOOT at the 2 shield tips (dark|navy, +81k err over ~1258px — cream/navy bleed into
+> the dark bg at the convex points), then inner cream/navy edge precision (+52k). Yellow is NOT the
+> problem (proved by path-swap: VM-rest + our-yellow = 1.67%). (2) Server-side / Cloud will NOT
+> close the gap by itself: same code => identical SVG; VM's own SVG already measures 1.90% in OUR
+> browser harness, so the platform is not the ceiling — the tracer's corner GEOMETRY is. Cloud Run
+> is currently an nginx static host (zero compute); a backend = porting ~6,300 lines of
+> browser-coupled JS, identical output until the algorithm improves. Cloud only earns its place as
+> the deployment vehicle for a HEAVIER algorithm too slow for a browser tab. (3) Verify-before-build
+> next step: uncap the palette boundary optimizer in-browser (no time cap, many candidates, ~60s)
+> to test whether "more search" helps AT ALL before any port — diagnosis predicts it won't, because
+> the optimizer already picks the best candidate and VM-quality corner geometry isn't in the
+> candidate space. The real lever is coverage-aware corner reconstruction at the tips. Also logged:
+> an exact-interior-colour (mode vs mean) fill tweak that is edge-neutral + MAE-negligible (<0.3%) —
+> tried and reverted; low priority. Tree is clean at shipped `fringedissolve1` / rev `00016-4cr`.
+
 > **HANDOFF -> CODEX (2026-06-28 [claude]):** Coverage-reconstruction gain shipped — outline
 > **5.32% -> 4.07%** edge (Auto/Palette/k5). Diagnosed end-to-end (data, not guessing): the entire
 > outline gap vs VM is the cream/navy edge GEOMETRY (proved by swap test: VM's non-yellow paths +
