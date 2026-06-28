@@ -4315,6 +4315,7 @@ function buildBenchmarkRun(context) {
     backgroundDetach: compactObject(traced.backgroundDetach),
     paletteInfo: compactObject(traced.paletteInfo),
     paletteOptimization: compactObject(traced.paletteOptimization),
+    thinStrokeRecovery: compactObject(traced.thinStrokeRecovery),
     tonalBanding: compactObject(traced.tonalBanding),
     regionEngine: compactObject(traced.regionEngine),
     regionOptimization: compactObject(traced.regionOptimization),
@@ -5478,12 +5479,13 @@ function buildPaletteTransitionMask(imageData, coverageField = [], options = {})
 // Count palette colors that are just a linear blend of two OTHER palette colors — i.e. the
 // anti-aliased edge tone between two real colors (e.g. light-blue between teal and white).
 // Such "fringe" colors are redundant and, if promoted to a real color, spawn sliver regions.
-function paletteFringeCount(palette) {
-  let count = 0;
+// Per-color flags: true where a palette color sits on the blend segment between two
+// other (more saturated/separated) palette colors, i.e. it is an anti-aliased fringe.
+function paletteFringeFlags(palette) {
+  const flags = new Array(palette.length).fill(false);
   for (let i = 0; i < palette.length; i += 1) {
     const c = palette[i];
-    let fringe = false;
-    for (let a = 0; a < palette.length && !fringe; a += 1) {
+    for (let a = 0; a < palette.length && !flags[i]; a += 1) {
       for (let b = a + 1; b < palette.length; b += 1) {
         if (a === i || b === i) continue;
         const A = palette[a];
@@ -5498,12 +5500,43 @@ function paletteFringeCount(palette) {
         const px = A[0] + abx * t;
         const py = A[1] + aby * t;
         const pz = A[2] + abz * t;
-        if (Math.hypot(c[0] - px, c[1] - py, c[2] - pz) < 18) { fringe = true; break; }
+        if (Math.hypot(c[0] - px, c[1] - py, c[2] - pz) < 18) { flags[i] = true; break; }
       }
     }
-    if (fringe) count += 1;
   }
+  return flags;
+}
+
+function paletteFringeCount(palette) {
+  const flags = paletteFringeFlags(palette);
+  let count = 0;
+  for (let i = 0; i < flags.length; i += 1) if (flags[i]) count += 1;
   return count;
+}
+
+// A fringe step-down is safe only if every NON-fringe (anchor) color of `fromPalette`
+// maps to a DISTINCT nearest color in `toPalette`. If two anchors collapse onto the same
+// smaller-palette color, the smaller palette merged two genuinely distinct colors (e.g.
+// outline shield's navy interior + dark background) rather than just dropping a blend, so
+// we must not step down. Residual alone can't tell these apart: both dark-glow's correct
+// k4->k3 drop and outline's wrong k5->k3 merge have high k=3 residual.
+function paletteStepDownSafe(fromPalette, toPalette) {
+  const flags = paletteFringeFlags(fromPalette);
+  const used = new Set();
+  for (let i = 0; i < fromPalette.length; i += 1) {
+    if (flags[i]) continue; // a blend color is allowed to disappear
+    const c = fromPalette[i];
+    let best = Infinity;
+    let bestJ = -1;
+    for (let j = 0; j < toPalette.length; j += 1) {
+      const t = toPalette[j];
+      const d = Math.hypot(c[0] - t[0], c[1] - t[1], c[2] - t[2]);
+      if (d < best) { best = d; bestJ = j; }
+    }
+    if (bestJ < 0 || used.has(bestJ)) return false; // two anchors merged into one target
+    used.add(bestJ);
+  }
+  return true;
 }
 
 function selectPaletteLadderEntry(ladder, options = {}) {
@@ -5531,16 +5564,17 @@ function selectPaletteLadderEntry(ladder, options = {}) {
   }
 
   // AA fringe step-down: if the chosen palette includes a blend (edge) color, prefer the
-  // largest fringe-free palette below it — BUT only if that smaller palette is still "good"
-  // (selectionResidual within threshold). This stops fine-detail logos promoting the AA fringe
-  // to a real color (fine-text k=4 -> k=3), WITHOUT collapsing onto a palette that merges two
-  // genuinely distinct colors (outline shield: keep k=5 that separates navy interior from the
-  // dark background rather than falling back to a high-residual k=3). No-op when fringe-free.
+  // largest fringe-free palette below it — BUT only if stepping there does not MERGE two
+  // genuinely distinct anchor colors (see paletteStepDownSafe). This drops the AA fringe for
+  // fine-text (k=4 -> k=3) and dark-glow (k=4 -> k=3, restoring the glow's clean k=3 base),
+  // while keeping outline-shield at k=5 (k=3 would merge navy interior into the dark bg).
+  // Smaller palettes only merge more, so the first injective-unsafe fringe-free palette below
+  // the choice means no smaller palette is safe either — stop.
   const ci = ladder.indexOf(choice);
   if (ci > 0 && paletteFringeCount(choice.palette) > 0) {
     for (let i = ci - 1; i >= 0; i -= 1) {
       if (paletteFringeCount(ladder[i].palette) !== 0) continue;
-      if (ladder[i].selectionResidual > threshold) break; // smaller palette would merge real colors
+      if (!paletteStepDownSafe(choice.palette, ladder[i].palette)) break;
       choice = ladder[i];
       break;
     }
@@ -5891,6 +5925,389 @@ function selectPaletteBoundaryResult(results, optimizer) {
   return { best, bestEdge, edgeBandLimit };
 }
 
+function loopToLineSubpath(points, options) {
+  let pts = points.slice();
+  if (pts.length > 1 && samePoint(pts[0], pts[pts.length - 1])) pts.pop();
+  pts = simplifyClosedLoop(pts, adaptiveLoopSimplifyTolerance(pts, options));
+  if (pts.length < 3) return null;
+  return `M ${pointCommand(pts[0])} ${pts.slice(1).map((point) => `L ${pointCommand(point)}`).join(" ")} Z`;
+}
+
+function paletteBoundarySimplifierVariants() {
+  return [
+    {
+      name: "smooth-a28-c065",
+      label: "Smooth refit 0.28 / corner 0.65",
+      mode: "smooth",
+      fit: {
+        simplifyTolerance: 0.28,
+        cornerAngle: 0.65,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.14,
+        largeSimplifyTolerance: 0.36,
+        detailSimplifySpan: 96,
+        detailThinSpan: 12,
+        detailComplexityRatio: 4.2
+      }
+    },
+    {
+      name: "smooth-a38-c060",
+      label: "Smooth refit 0.38 / corner 0.60",
+      mode: "smooth",
+      fit: {
+        simplifyTolerance: 0.38,
+        cornerAngle: 0.60,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.16,
+        largeSimplifyTolerance: 0.48,
+        detailSimplifySpan: 104,
+        detailThinSpan: 14,
+        detailComplexityRatio: 4.0
+      }
+    },
+    {
+      name: "smooth-a50-c055",
+      label: "Smooth refit 0.50 / corner 0.55",
+      mode: "smooth",
+      fit: {
+        simplifyTolerance: 0.50,
+        cornerAngle: 0.55,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.18,
+        largeSimplifyTolerance: 0.64,
+        detailSimplifySpan: 118,
+        detailThinSpan: 16,
+        detailComplexityRatio: 3.8
+      }
+    },
+    {
+      name: "line-a16",
+      label: "Endpoint line refit 0.16",
+      mode: "line",
+      fit: {
+        simplifyTolerance: 0.16,
+        cornerAngle: 0.65,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.08,
+        largeSimplifyTolerance: 0.22,
+        detailSimplifySpan: 96,
+        detailThinSpan: 12,
+        detailComplexityRatio: 4.2
+      }
+    },
+    {
+      name: "line-a22",
+      label: "Endpoint line refit 0.22",
+      mode: "line",
+      fit: {
+        simplifyTolerance: 0.22,
+        cornerAngle: 0.62,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.10,
+        largeSimplifyTolerance: 0.30,
+        detailSimplifySpan: 104,
+        detailThinSpan: 14,
+        detailComplexityRatio: 4.0
+      }
+    },
+    {
+      name: "line-a30",
+      label: "Endpoint line refit 0.30",
+      mode: "line",
+      fit: {
+        simplifyTolerance: 0.30,
+        cornerAngle: 0.58,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: 0.12,
+        largeSimplifyTolerance: 0.40,
+        detailSimplifySpan: 118,
+        detailThinSpan: 16,
+        detailComplexityRatio: 3.8
+      }
+    }
+  ];
+}
+
+function paletteBoundarySimplifierConfig() {
+  return {
+    triggerEdgeThreshold: 0.055,
+    minSourceEdgeGap: 0.010,
+    minAcceptEdgeImprovement: 0.012,
+    hotPixelSlack: 0.0015,
+    contaminationSlack: 0.0015,
+    maxPathGrowth: 1.15,
+    maxNodeGrowth: 4.0,
+    compactEdgeBand: 0.0002,
+    maxSources: 5
+  };
+}
+
+function paletteBoundaryRawBest(results) {
+  const measured = results.filter((result) => result.difference && !result.difference.error);
+  if (!measured.length) return results[0] || null;
+  return measured.reduce((best, result) => (
+    result.difference.edgeWeightedRmse < best.difference.edgeWeightedRmse ? result : best
+  ), measured[0]);
+}
+
+function refitPaletteBoundaryPathData(d, variant, stats) {
+  const commands = parsePathData(d || "");
+  if (!commands) {
+    stats.unsupportedPaths += 1;
+    return d;
+  }
+
+  const pieces = [];
+  for (const subpath of splitPathSubpaths(commands)) {
+    const loop = subpathToEndpointLoop(subpath);
+    if (!loop || loop.length < 3) {
+      stats.unsupportedSubpaths += 1;
+      pieces.push(commandsToPath(subpath));
+      continue;
+    }
+
+    const before = loop.length;
+    const nextD = variant.mode === "line"
+      ? loopToLineSubpath(loop, variant.fit)
+      : loopToSmoothSubpath(loop, variant.fit);
+    if (!nextD) {
+      stats.unsupportedSubpaths += 1;
+      pieces.push(commandsToPath(subpath));
+      continue;
+    }
+
+    const afterCommands = parsePathData(nextD);
+    stats.subpathsRefit += 1;
+    stats.endpointPointsBefore += before;
+    stats.endpointPointsAfter += afterCommands
+      ? afterCommands.reduce((sum, command) => sum + Math.floor(command.values.length / 2), 0)
+      : before;
+    pieces.push(nextD);
+  }
+
+  return pieces.join(" ");
+}
+
+function simplifyPaletteBoundarySvg(svg, sourceName, variant) {
+  const parser = new DOMParser();
+  const documentRef = parser.parseFromString(svg, "image/svg+xml");
+  const parserError = documentRef.querySelector("parsererror");
+  const root = documentRef.documentElement;
+  const stats = {
+    source: sourceName,
+    variant: variant.name,
+    mode: variant.mode,
+    pathsVisited: 0,
+    subpathsRefit: 0,
+    unsupportedPaths: 0,
+    unsupportedSubpaths: 0,
+    endpointPointsBefore: 0,
+    endpointPointsAfter: 0,
+    parserError: ""
+  };
+  if (parserError || !root || root.tagName.toLowerCase() !== "svg") {
+    stats.parserError = parserError ? parserError.textContent.trim().slice(0, 160) : "No SVG root";
+    return { svg, stats, ok: false };
+  }
+
+  for (const path of Array.from(root.querySelectorAll("path"))) {
+    const d = path.getAttribute("d") || "";
+    if (!d) continue;
+    stats.pathsVisited += 1;
+    const nextD = refitPaletteBoundaryPathData(d, variant, stats);
+    if (nextD && nextD !== d) path.setAttribute("d", nextD);
+  }
+
+  root.setAttribute("data-palette-boundary-simplifier", "v1");
+  root.setAttribute("data-palette-boundary-simplifier-source", sourceName);
+  root.setAttribute("data-palette-boundary-simplifier-variant", variant.name);
+  return {
+    svg: `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(root)}`,
+    stats,
+    ok: true
+  };
+}
+
+function paletteBoundarySimplifierGuardFailures(candidate, current, base, config) {
+  const failures = [];
+  if (!candidate.difference || candidate.difference.error || !current.difference || current.difference.error || !base.difference || base.difference.error) {
+    return ["difference unavailable"];
+  }
+
+  const edgeImprovement = current.difference.edgeWeightedRmse - candidate.difference.edgeWeightedRmse;
+  const hotDelta = candidate.difference.hotPixelRatio - current.difference.hotPixelRatio;
+  const contaminationDelta = candidate.difference.backgroundContaminationRatio - current.difference.backgroundContaminationRatio;
+  const maxPaths = Math.ceil(base.paths * config.maxPathGrowth);
+  const maxNodes = Math.ceil(base.nodes * config.maxNodeGrowth);
+  if (edgeImprovement < config.minAcceptEdgeImprovement) failures.push("insufficient edge improvement");
+  if (hotDelta > config.hotPixelSlack) failures.push("hot pixels");
+  if (contaminationDelta > config.contaminationSlack) failures.push("background contamination");
+  if (candidate.paths > maxPaths) failures.push("path growth");
+  if (candidate.nodes > maxNodes) failures.push("node growth");
+  return failures;
+}
+
+function paletteBoundarySimplifierSourceResults(results, current, base, config) {
+  if (!current?.difference || current.difference.error) return [];
+  const currentEdge = current.difference.edgeWeightedRmse;
+  const maxPaths = Math.ceil(base.paths * config.maxPathGrowth);
+  return results
+    .filter((result) => result !== base &&
+      result !== current &&
+      result.difference &&
+      !result.difference.error &&
+      result.difference.edgeWeightedRmse <= currentEdge - config.minSourceEdgeGap &&
+      result.paths <= maxPaths)
+    .sort((a, b) => {
+      const edgeDelta = a.difference.edgeWeightedRmse - b.difference.edgeWeightedRmse;
+      if (Math.abs(edgeDelta) > 0.00001) return edgeDelta;
+      return a.nodes - b.nodes;
+    })
+    .slice(0, config.maxSources);
+}
+
+async function optimizePaletteBoundarySimplifier(results, current, base, referenceImageData, guardOptions, optimizer) {
+  const config = paletteBoundarySimplifierConfig();
+  const rawBest = paletteBoundaryRawBest(results);
+  const stats = {
+    enabled: optimizer.enabled,
+    applied: false,
+    selected: false,
+    guardReason: "not evaluated",
+    triggerEdgeThreshold: config.triggerEdgeThreshold,
+    minSourceEdgeGap: config.minSourceEdgeGap,
+    minAcceptEdgeImprovement: config.minAcceptEdgeImprovement,
+    compactEdgeBand: config.compactEdgeBand,
+    baselineCandidate: current?.candidate?.name || "base",
+    rawBestCandidate: rawBest?.candidate?.name || "",
+    rawBestEdgeRmse: rawBest?.difference?.edgeWeightedRmse,
+    baselineEdgeRmse: current?.difference?.edgeWeightedRmse,
+    selectedEdgeRmse: current?.difference?.edgeWeightedRmse,
+    baselineHotPixelRatio: current?.difference?.hotPixelRatio,
+    selectedHotPixelRatio: current?.difference?.hotPixelRatio,
+    baselinePaths: current?.paths || 0,
+    selectedPaths: current?.paths || 0,
+    baselineNodes: current?.nodes || 0,
+    selectedNodes: current?.nodes || 0,
+    maxAllowedPaths: Math.ceil((base?.paths || 0) * config.maxPathGrowth),
+    maxAllowedNodes: Math.ceil((base?.nodes || 0) * config.maxNodeGrowth),
+    sourcesTested: 0,
+    candidatesTested: 0,
+    selectedCandidate: current?.candidate?.name || "base",
+    candidateSummaries: []
+  };
+
+  if (!optimizer.enabled) {
+    stats.guardReason = "palette optimizer off";
+    return { best: current, stats };
+  }
+  if (!current?.difference || current.difference.error || !base?.difference || base.difference.error) {
+    stats.guardReason = "baseline difference unavailable";
+    return { best: current, stats };
+  }
+  if (current.difference.edgeWeightedRmse < config.triggerEdgeThreshold) {
+    stats.guardReason = "edge already below simplifier trigger";
+    return { best: current, stats };
+  }
+
+  const sources = paletteBoundarySimplifierSourceResults(results, current, base, config);
+  stats.sourcesTested = sources.length;
+  if (!sources.length) {
+    stats.guardReason = "no accurate rejected boundary source";
+    return { best: current, stats };
+  }
+
+  stats.applied = true;
+  const variants = paletteBoundarySimplifierVariants();
+  let best = current;
+  let bestCandidateSummary = null;
+
+  for (const source of sources) {
+    for (const variant of variants) {
+      const simplified = simplifyPaletteBoundarySvg(source.traced.svg, source.candidate.name, variant);
+      const candidateName = `boundary-simplifier:${source.candidate.name}:${variant.name}`;
+      let difference = null;
+      let paths = countSvgElements(simplified.svg, "path");
+      let nodes = estimateSvgPointCount(simplified.svg);
+      if (!simplified.ok) {
+        difference = { error: simplified.stats.parserError || "simplifier parse failed" };
+      } else {
+        try {
+          difference = await measureSvgDifference(referenceImageData, simplified.svg, guardOptions);
+        } catch (error) {
+          difference = { error: error.message };
+        }
+      }
+
+      const candidate = {
+        candidate: {
+          name: candidateName,
+          label: `Boundary simplifier: ${source.candidate.name} / ${variant.label}`
+        },
+        traced: {
+          ...source.traced,
+          svg: simplified.svg,
+          pathCount: paths
+        },
+        difference,
+        paths,
+        nodes,
+        simplifierStats: simplified.stats
+      };
+      const guardFailures = paletteBoundarySimplifierGuardFailures(candidate, current, base, config);
+      const summary = {
+        name: candidateName,
+        source: source.candidate.name,
+        variant: variant.name,
+        mode: variant.mode,
+        edgeWeightedRmse: difference?.edgeWeightedRmse,
+        meanError: difference?.meanError,
+        hotPixelRatio: difference?.hotPixelRatio,
+        backgroundContaminationRatio: difference?.backgroundContaminationRatio,
+        paths,
+        nodes,
+        endpointPointsBefore: simplified.stats.endpointPointsBefore,
+        endpointPointsAfter: simplified.stats.endpointPointsAfter,
+        subpathsRefit: simplified.stats.subpathsRefit,
+        guardFailures,
+        error: difference?.error
+      };
+      stats.candidateSummaries.push(summary);
+      stats.candidatesTested += 1;
+
+      if (!guardFailures.length) {
+        const currentBestEdge = best.difference?.edgeWeightedRmse ?? Infinity;
+        const candidateEdge = difference?.edgeWeightedRmse ?? Infinity;
+        const betterEdge = candidateEdge < currentBestEdge - config.compactEdgeBand;
+        const sameEdgeSimpler = Math.abs(candidateEdge - currentBestEdge) <= config.compactEdgeBand && nodes < best.nodes;
+        if (best === current || betterEdge || sameEdgeSimpler) {
+          best = candidate;
+          bestCandidateSummary = summary;
+        }
+      }
+
+      await nextFrame();
+    }
+  }
+
+  if (best !== current) {
+    stats.selected = true;
+    stats.guardReason = "simplified accurate boundary passed guard";
+    stats.selectedCandidate = best.candidate.name;
+    stats.selectedEdgeRmse = best.difference?.edgeWeightedRmse;
+    stats.selectedHotPixelRatio = best.difference?.hotPixelRatio;
+    stats.selectedPaths = best.paths;
+    stats.selectedNodes = best.nodes;
+    stats.selectedSource = bestCandidateSummary?.source;
+    stats.selectedVariant = bestCandidateSummary?.variant;
+    best.traced.paletteBoundarySimplifier = stats;
+    return { best, stats };
+  }
+
+  stats.guardReason = "all simplified boundaries rejected";
+  return { best: current, stats };
+}
+
 function tonalBandCandidatePassesGuard(candidate, base, optimizer) {
   if (!candidate.difference || candidate.difference.error || !base.difference || base.difference.error) return false;
   const meanImprovement = base.difference.meanError - candidate.difference.meanError;
@@ -6010,6 +6427,489 @@ async function optimizeGlowTonalBanding(baseTraced, referenceImageData, pipeline
   };
 }
 
+function thinStrokeRecoveryOptions(options = {}, imageData = null) {
+  const area = imageData ? imageData.width * imageData.height : 0;
+  return {
+    enabled: devOptions.paletteOptimize && options.detail !== "low",
+    minTargetPixels: Math.max(24, Math.round(area * 0.00025)),
+    minTargetRatio: 0.00025,
+    maxTargetRatio: 0.08,
+    minChroma: 72,
+    minLuminance: 78,
+    minBackgroundDistance: 52,
+    minThinCoverage: 0.42,
+    minComponentArea: 4,
+    thinMinSpan: 22,
+    thinMaxArea: 6200,
+    smallMaxArea: 520,
+    smallMaxSpan: 36,
+    maxTargets: 3,
+    maxTargetDistance: 178,
+    minProjectionKeep: 0.30,
+    minLoopArea: 5,
+    maxLoopArea: Math.max(900, Math.round(area * 0.025)),
+    replaceColorDistance: 28,
+    replaceThinMinSpan: 28,
+    replaceMaxArea: Math.max(1800, Math.round(area * 0.05)),
+    maxPathGrowth: 1.18,
+    maxExtraPaths: 8,
+    maxNodeGrowth: 2.6,
+    minEdgeImprovement: 0.00018,
+    minMeanImprovement: 0.00003,
+    hotPixelSlack: 0.0008,
+    contaminationSlack: 0.0008,
+    edgeSlack: 0.00012
+  };
+}
+
+function createSkippedThinStrokeStats(reason, options = {}) {
+  return {
+    enabled: Boolean(options.enabled),
+    selected: false,
+    applied: false,
+    guardReason: reason,
+    targets: [],
+    candidatesTested: 0,
+    pathsBuilt: 0,
+    pathsReplaced: 0,
+    loopsBuilt: 0,
+    baselineEdgeRmse: null,
+    selectedEdgeRmse: null,
+    baselineHotPixelRatio: null,
+    selectedHotPixelRatio: null,
+    baselinePaths: null,
+    selectedPaths: null,
+    baselineNodes: null,
+    selectedNodes: null
+  };
+}
+
+function componentLooksLikeThinStroke(component, options) {
+  const width = component.bounds.maxX - component.bounds.minX + 1;
+  const height = component.bounds.maxY - component.bounds.minY + 1;
+  const minSpan = Math.min(width, height);
+  const span = Math.max(width, height);
+  if (component.area <= options.smallMaxArea && span <= options.smallMaxSpan) return true;
+  return minSpan <= options.thinMinSpan && component.area <= options.thinMaxArea;
+}
+
+function paletteLabelCounts(labels, paletteLength) {
+  const counts = new Uint32Array(paletteLength);
+  for (let index = 0; index < labels.length; index += 1) {
+    const label = labels[index];
+    if (label >= 0 && label < paletteLength) counts[label] += 1;
+  }
+  return counts;
+}
+
+function selectThinStrokeTargets(imageData, palette, backgroundColor, options) {
+  if (!options.enabled || !imageData || !palette || palette.length < 3) return { targets: [], labels: null };
+  const labels = quantizeToPalette(imageData, palette);
+  const counts = paletteLabelCounts(labels, palette.length);
+  const area = imageData.width * imageData.height;
+  const targets = [];
+
+  for (let colorIndex = 0; colorIndex < palette.length; colorIndex += 1) {
+    const color = palette[colorIndex];
+    const count = counts[colorIndex] || 0;
+    const ratio = count / Math.max(1, area);
+    const chroma = colorChroma(color);
+    const lum = luminance(color);
+    if (count < options.minTargetPixels || ratio < options.minTargetRatio || ratio > options.maxTargetRatio) continue;
+    if (chroma < options.minChroma || lum < options.minLuminance) continue;
+    if (colorDistanceSq(color, backgroundColor || [0, 0, 0]) < options.minBackgroundDistance * options.minBackgroundDistance) continue;
+
+    const components = findComponentsForLabel(labels, imageData.width, imageData.height, colorIndex, options.minComponentArea);
+    let thinPixels = 0;
+    let thinComponents = 0;
+    let maxThinArea = 0;
+    for (const component of components) {
+      if (!componentLooksLikeThinStroke(component, options)) continue;
+      thinPixels += component.area;
+      thinComponents += 1;
+      maxThinArea = Math.max(maxThinArea, component.area);
+    }
+    const thinCoverage = thinPixels / Math.max(1, count);
+    if (thinComponents < 1 || thinCoverage < options.minThinCoverage) continue;
+    targets.push({
+      colorIndex,
+      color,
+      colorHex: rgbToHex(color),
+      pixels: count,
+      ratio,
+      chroma,
+      luminance: lum,
+      components: components.length,
+      thinComponents,
+      thinPixels,
+      thinCoverage,
+      maxThinArea,
+      score: thinCoverage * 3 + chroma / 120 + Math.min(1, 0.08 / Math.max(0.001, ratio))
+    });
+  }
+
+  targets.sort((a, b) => b.score - a.score);
+  return { targets: targets.slice(0, options.maxTargets), labels };
+}
+
+function nearestPaletteNeighbor(rgb, palette, targetIndex) {
+  let bestIndex = -1;
+  let bestDistance = Infinity;
+  for (let index = 0; index < palette.length; index += 1) {
+    if (index === targetIndex) continue;
+    const distance = colorDistanceSq(rgb, palette[index]);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  }
+  return bestIndex >= 0 ? palette[bestIndex] : [0, 0, 0];
+}
+
+function projectedColorMembership(rgb, target, neighbor, options) {
+  const vx = target[0] - neighbor[0];
+  const vy = target[1] - neighbor[1];
+  const vz = target[2] - neighbor[2];
+  const denom = vx * vx + vy * vy + vz * vz;
+  if (denom < 24 * 24) return 0;
+  const dot = (rgb[0] - neighbor[0]) * vx + (rgb[1] - neighbor[1]) * vy + (rgb[2] - neighbor[2]) * vz;
+  const projection = clamp(dot / denom, 0, 1);
+  if (projection <= 0) return 0;
+  const targetDistance = Math.sqrt(colorDistanceSq(rgb, target));
+  if (targetDistance > options.maxTargetDistance && projection < options.minProjectionKeep) return 0;
+  return projection;
+}
+
+function buildThinStrokeMembershipField(imageData, palette, target, options) {
+  const { width, height, data } = imageData;
+  const field = new Float32Array(width * height);
+  const targetColor = target.color;
+  for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
+    if (data[index + 3] < 12) continue;
+    const rgb = matteRgb(data, index);
+    const neighbor = nearestPaletteNeighbor(rgb, palette, target.colorIndex);
+    field[pixel] = projectedColorMembership(rgb, targetColor, neighbor, options);
+  }
+  return field;
+}
+
+function thinStrokeLoopEligible(points, options) {
+  const stats = loopGeometryStats(points);
+  if (stats.area < options.minLoopArea || stats.area > options.maxLoopArea) return false;
+  if (stats.minSpan <= options.thinMinSpan) return true;
+  return stats.area <= options.smallMaxArea && stats.span <= options.smallMaxSpan;
+}
+
+function thinStrokeRecoveryCandidates() {
+  return [
+    { name: "thin-strokes-balanced", label: "Thin strokes iso 0.50", iso: 0.50, coordinateOffset: 0.5, simplifyTolerance: 0.055, cornerAngle: 0.62 },
+    { name: "thin-strokes-wide", label: "Thin strokes iso 0.44", iso: 0.44, coordinateOffset: 0.5, simplifyTolerance: 0.06, cornerAngle: 0.62 },
+    { name: "thin-strokes-crisp", label: "Thin strokes iso 0.56", iso: 0.56, coordinateOffset: 0.5, simplifyTolerance: 0.045, cornerAngle: 0.58 }
+  ];
+}
+
+function buildThinStrokeLayer(imageData, palette, targets, candidate, options) {
+  const paths = [];
+  const targetStats = [];
+  let loopsBuilt = 0;
+  let loopsSkipped = 0;
+  let openLoops = 0;
+
+  for (const target of targets) {
+    const field = buildThinStrokeMembershipField(imageData, palette, target, options);
+    const segments = extractIsoSegments(field, imageData.width, imageData.height, candidate.iso);
+    const linked = linkSegmentsIntoLoops(segments, imageData.width, imageData.height);
+    const subpaths = [];
+    let targetLoops = 0;
+    let targetSkipped = 0;
+
+    for (const loop of linked.loops) {
+      if (loop.kind === "open") {
+        openLoops += 1;
+        targetSkipped += 1;
+        continue;
+      }
+      if (!thinStrokeLoopEligible(loop.points, options)) {
+        targetSkipped += 1;
+        continue;
+      }
+      const points = loop.points.map((point) => [
+        point[0] + candidate.coordinateOffset,
+        point[1] + candidate.coordinateOffset
+      ]);
+      const d = loopToSmoothSubpath(points, {
+        simplifyTolerance: candidate.simplifyTolerance,
+        cornerAngle: candidate.cornerAngle,
+        adaptiveSimplify: true,
+        detailSimplifyTolerance: Math.min(0.035, candidate.simplifyTolerance),
+        detailSimplifyArea: options.smallMaxArea,
+        detailSimplifySpan: options.smallMaxSpan,
+        detailThinSpan: options.thinMinSpan,
+        detailComplexityRatio: 2.4
+      });
+      if (!d) {
+        targetSkipped += 1;
+        continue;
+      }
+      subpaths.push(d);
+      targetLoops += 1;
+    }
+
+    if (subpaths.length) {
+      paths.push(`<path d="${subpaths.join(" ")}" fill="${target.colorHex}" fill-rule="evenodd" data-layer="thin-stroke-recovery" data-source-color="${target.colorHex}" />`);
+    }
+    loopsBuilt += targetLoops;
+    loopsSkipped += targetSkipped;
+    targetStats.push({
+      color: target.colorHex,
+      pixels: target.pixels,
+      ratio: target.ratio,
+      thinComponents: target.thinComponents,
+      thinCoverage: target.thinCoverage,
+      segments: segments.length,
+      loops: targetLoops,
+      skippedLoops: targetSkipped
+    });
+  }
+
+  if (!paths.length) {
+    return {
+      fragment: "",
+      stats: {
+        applied: false,
+        guardReason: "no eligible thin-stroke loops",
+        targets: targetStats,
+        pathsBuilt: 0,
+        loopsBuilt,
+        loopsSkipped,
+        openLoops
+      }
+    };
+  }
+
+  return {
+    fragment: [
+      `<g id="layer-thin-stroke-recovery" data-layer="thin-stroke-recovery" data-note="Metric-guarded source-derived thin stroke recovery">`,
+      ...paths,
+      `</g>`
+    ].join(""),
+    stats: {
+      applied: true,
+      guardReason: "candidate built",
+      targets: targetStats,
+      pathsBuilt: paths.length,
+      loopsBuilt,
+      loopsSkipped,
+      openLoops
+    }
+  };
+}
+
+function thinStrokeReplacementPath(path, targetColors, options) {
+  const fill = svgElementFillRgb(path);
+  if (!fill) return false;
+  const matchesTarget = targetColors.some((color) =>
+    colorDistanceSq(fill, color) <= options.replaceColorDistance * options.replaceColorDistance
+  );
+  if (!matchesTarget) return false;
+  const bounds = pathDataBounds(path.getAttribute("d") || "");
+  if (!bounds) return false;
+  const minSpan = Math.min(bounds.width, bounds.height);
+  const span = Math.max(bounds.width, bounds.height);
+  if (bounds.area <= options.smallMaxArea && span <= options.smallMaxSpan * 1.4) return true;
+  return minSpan <= options.replaceThinMinSpan && bounds.area <= options.replaceMaxArea;
+}
+
+function injectThinStrokeLayer(svg, fragment, targetColors, options) {
+  if (!fragment) return { svg, replaced: 0, parserError: "" };
+  const parser = new DOMParser();
+  const documentRef = parser.parseFromString(svg, "image/svg+xml");
+  const parserError = documentRef.querySelector("parsererror");
+  const root = documentRef.documentElement;
+  if (parserError || !root || root.tagName.toLowerCase() !== "svg") {
+    return { svg, replaced: 0, parserError: parserError ? parserError.textContent.trim().slice(0, 160) : "No SVG root" };
+  }
+
+  let replaced = 0;
+  for (const path of Array.from(root.querySelectorAll("path"))) {
+    if (path.getAttribute("data-layer") === "thin-stroke-recovery") continue;
+    if (!thinStrokeReplacementPath(path, targetColors, options)) continue;
+    if (path.parentNode) {
+      path.parentNode.removeChild(path);
+      replaced += 1;
+    }
+  }
+
+  const wrapper = documentRef.createElementNS("http://www.w3.org/2000/svg", "g");
+  wrapper.innerHTML = fragment;
+  const layer = wrapper.firstElementChild;
+  if (!layer) return { svg, replaced, parserError: "thin-stroke fragment parse failed" };
+  root.appendChild(layer);
+  root.setAttribute("data-thin-stroke-recovery", "v1");
+  return {
+    svg: `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(root)}`,
+    replaced,
+    parserError: ""
+  };
+}
+
+function thinStrokeGuardFailures(candidate, base, options) {
+  const failures = [];
+  if (!candidate.difference || candidate.difference.error || !base.difference || base.difference.error) return ["difference unavailable"];
+  const edgeDelta = candidate.difference.edgeWeightedRmse - base.difference.edgeWeightedRmse;
+  const meanDelta = candidate.difference.meanError - base.difference.meanError;
+  const hotDelta = candidate.difference.hotPixelRatio - base.difference.hotPixelRatio;
+  const contaminationDelta = candidate.difference.backgroundContaminationRatio - base.difference.backgroundContaminationRatio;
+  const maxPaths = Math.min(Math.ceil(base.paths * options.maxPathGrowth), base.paths + options.maxExtraPaths);
+  if (candidate.paths > maxPaths) failures.push("path growth");
+  if (candidate.nodes > Math.ceil(base.nodes * options.maxNodeGrowth)) failures.push("node growth");
+  if (hotDelta > options.hotPixelSlack) failures.push("hot pixels");
+  if (contaminationDelta > options.contaminationSlack) failures.push("background contamination");
+  if (!(edgeDelta < -options.minEdgeImprovement || (Math.abs(edgeDelta) <= options.edgeSlack && meanDelta < -options.minMeanImprovement))) {
+    failures.push("insufficient visual-error improvement");
+  }
+  return failures;
+}
+
+function thinStrokeCandidatePassesGuard(candidate, base, options) {
+  return thinStrokeGuardFailures(candidate, base, options).length === 0;
+}
+
+async function optimizeThinStrokeRecovery(baseTraced, referenceImageData, pipelineOptions, palette) {
+  const options = thinStrokeRecoveryOptions(pipelineOptions, referenceImageData);
+  const backgroundColor = pipelineOptions.backgroundColor || estimateBorderBackgroundColor(referenceImageData);
+  const selectedTargets = selectThinStrokeTargets(referenceImageData, palette, backgroundColor, options);
+  const basePaths = countSvgElements(baseTraced.svg, "path");
+  const baseNodes = estimateSvgPointCount(baseTraced.svg);
+
+  if (!options.enabled) {
+    return { ...baseTraced, thinStrokeRecovery: createSkippedThinStrokeStats("off", options) };
+  }
+  if (!selectedTargets.targets.length) {
+    return {
+      ...baseTraced,
+      thinStrokeRecovery: {
+        ...createSkippedThinStrokeStats("no thin high-chroma target colors", options),
+        enabled: true
+      }
+    };
+  }
+
+  const guardOptions = { backgroundColor };
+  const base = {
+    difference: null,
+    paths: basePaths,
+    nodes: baseNodes
+  };
+  try {
+    base.difference = await measureSvgDifference(referenceImageData, baseTraced.svg, guardOptions);
+  } catch (error) {
+    base.difference = { error: error.message };
+  }
+
+  const summaries = [];
+  let best = null;
+  for (const candidate of thinStrokeRecoveryCandidates()) {
+    const layer = buildThinStrokeLayer(referenceImageData, palette, selectedTargets.targets, candidate, options);
+    if (!layer.fragment) {
+      summaries.push({
+        name: candidate.name,
+        label: candidate.label,
+        ...layer.stats,
+        selected: false
+      });
+      continue;
+    }
+    const injected = injectThinStrokeLayer(baseTraced.svg, layer.fragment, selectedTargets.targets.map((target) => target.color), options);
+    const measured = {
+      candidate,
+      svg: injected.svg,
+      paths: countSvgElements(injected.svg, "path"),
+      nodes: estimateSvgPointCount(injected.svg),
+      difference: null,
+      layerStats: layer.stats,
+      pathsReplaced: injected.replaced,
+      parserError: injected.parserError
+    };
+    try {
+      measured.difference = injected.parserError
+        ? { error: injected.parserError }
+        : await measureSvgDifference(referenceImageData, injected.svg, guardOptions);
+    } catch (error) {
+      measured.difference = { error: error.message };
+    }
+    measured.guardFailures = thinStrokeGuardFailures(measured, base, options);
+    measured.selected = measured.guardFailures.length === 0;
+    summaries.push({
+      name: candidate.name,
+      label: candidate.label,
+      selected: measured.selected,
+      guardFailures: measured.guardFailures,
+      edgeWeightedRmse: measured.difference?.edgeWeightedRmse,
+      meanError: measured.difference?.meanError,
+      hotPixelRatio: measured.difference?.hotPixelRatio,
+      backgroundContaminationRatio: measured.difference?.backgroundContaminationRatio,
+      paths: measured.paths,
+      nodes: measured.nodes,
+      pathsBuilt: layer.stats.pathsBuilt,
+      pathsReplaced: injected.replaced,
+      loopsBuilt: layer.stats.loopsBuilt,
+      error: measured.difference?.error
+    });
+    if (measured.selected && (!best || measured.difference.edgeWeightedRmse < best.difference.edgeWeightedRmse)) best = measured;
+    await nextFrame();
+  }
+
+  const selected = Boolean(best);
+  const selectedStats = selected ? best.layerStats : null;
+  const firstSummary = summaries.find((entry) => !entry.error && entry.edgeWeightedRmse !== undefined) || null;
+  const stats = {
+    enabled: true,
+    selected,
+    applied: Boolean(firstSummary),
+    guardReason: selected
+      ? `selected ${best.candidate.name}`
+      : "metric guard kept base trace",
+    targets: selectedTargets.targets.map((target) => ({
+      color: target.colorHex,
+      pixels: target.pixels,
+      ratio: target.ratio,
+      chroma: target.chroma,
+      luminance: target.luminance,
+      thinComponents: target.thinComponents,
+      thinCoverage: target.thinCoverage
+    })),
+    candidatesTested: summaries.length,
+    selectedCandidate: selected ? best.candidate.name : "base",
+    selectedLabel: selected ? best.candidate.label : "Base trace",
+    baselineEdgeRmse: base.difference?.edgeWeightedRmse,
+    selectedEdgeRmse: selected ? best.difference?.edgeWeightedRmse : base.difference?.edgeWeightedRmse,
+    baselineMeanError: base.difference?.meanError,
+    selectedMeanError: selected ? best.difference?.meanError : base.difference?.meanError,
+    baselineHotPixelRatio: base.difference?.hotPixelRatio,
+    selectedHotPixelRatio: selected ? best.difference?.hotPixelRatio : base.difference?.hotPixelRatio,
+    baselineBackgroundContaminationRatio: base.difference?.backgroundContaminationRatio,
+    selectedBackgroundContaminationRatio: selected ? best.difference?.backgroundContaminationRatio : base.difference?.backgroundContaminationRatio,
+    baselinePaths: base.paths,
+    selectedPaths: selected ? best.paths : base.paths,
+    baselineNodes: base.nodes,
+    selectedNodes: selected ? best.nodes : base.nodes,
+    maxAllowedPaths: Math.min(Math.ceil(base.paths * options.maxPathGrowth), base.paths + options.maxExtraPaths),
+    maxAllowedNodes: Math.ceil(base.nodes * options.maxNodeGrowth),
+    pathsBuilt: selectedStats?.pathsBuilt || 0,
+    pathsReplaced: selected ? best.pathsReplaced : 0,
+    loopsBuilt: selectedStats?.loopsBuilt || 0,
+    candidateSummaries: summaries
+  };
+
+  return {
+    ...baseTraced,
+    svg: selected ? best.svg : baseTraced.svg,
+    pathCount: selected ? best.paths : baseTraced.pathCount,
+    thinStrokeRecovery: stats
+  };
+}
+
 async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptions, ladder) {
   const regions = buildPaletteRegions(segSource, ladder.chosen.palette, { minArea: 6 });
   const optimizer = {
@@ -6057,8 +6957,11 @@ async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptio
 
   const base = results[0];
   const selection = selectPaletteBoundaryResult(results, optimizer);
-  const best = selection.best;
+  let best = selection.best;
   const bestEdge = selection.bestEdge;
+  const rawBestEdge = paletteBoundaryRawBest(results);
+  const simplifier = await optimizePaletteBoundarySimplifier(results, best, base, referenceImageData, guardOptions, optimizer);
+  best = simplifier.best;
 
   const selected = best.candidate.name !== "base";
   const stats = {
@@ -6071,6 +6974,8 @@ async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptio
     selectedCandidate: best.candidate.name,
     selectedLabel: best.candidate.label,
     bestEdgeCandidate: bestEdge.candidate.name,
+    rawBestEdgeCandidate: rawBestEdge?.candidate?.name,
+    rawBestEdgeRmse: rawBestEdge?.difference?.edgeWeightedRmse,
     edgeBandLimit: selection.edgeBandLimit,
     nodePreferenceEdgeBand: optimizer.nodePreferenceEdgeBand,
     forcedK: devOptions.paletteForceK,
@@ -6094,6 +6999,7 @@ async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptio
     maxAllowedPaths: Math.ceil(base.paths * optimizer.maxPathGrowth),
     maxAllowedNodes: Math.ceil(base.nodes * optimizer.maxNodeGrowth),
     maxAllowedNodesStrong: Math.ceil(base.nodes * optimizer.maxNodeGrowthStrong),
+    boundarySimplifier: simplifier.stats,
     candidateSummaries: results.map((result) => ({
       name: result.candidate.name,
       label: result.candidate.label,
@@ -6108,7 +7014,8 @@ async function optimizePaletteTrace(segSource, referenceImageData, pipelineOptio
   };
 
   best.traced.paletteOptimization = stats;
-  return optimizeGlowTonalBanding(best.traced, referenceImageData, pipelineOptions, best.difference, best.paths, best.nodes);
+  const withTonalBands = await optimizeGlowTonalBanding(best.traced, referenceImageData, pipelineOptions, best.difference, best.paths, best.nodes);
+  return optimizeThinStrokeRecovery(withTonalBands, referenceImageData, pipelineOptions, ladder.chosen.palette);
 }
 
 function runBackgroundDetach(imageData, options = {}) {
@@ -6602,6 +7509,19 @@ async function traceCurrentImage() {
     if (Array.isArray(paletteOpt.candidateSummaries)) {
       logLines.push(`Palette boundary candidates: ${paletteOpt.candidateSummaries.map((candidate) => `${candidate.name} edge ${(Number.isFinite(candidate.edgeWeightedRmse) ? candidate.edgeWeightedRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(candidate.hotPixelRatio) ? candidate.hotPixelRatio * 100 : 0).toFixed(1)}%, paths ${candidate.paths}, nodes ${candidate.nodes}`).join("; ")}`);
     }
+    if (paletteOpt.boundarySimplifier) {
+      const simple = paletteOpt.boundarySimplifier;
+      const rawNote = simple.rawBestCandidate
+        ? `; raw best ${simple.rawBestCandidate} ${(Number.isFinite(simple.rawBestEdgeRmse) ? simple.rawBestEdgeRmse * 100 : 0).toFixed(2)}%`
+        : "";
+      logLines.push(
+        `Boundary simplifier: ${simple.selected ? `selected ${simple.selectedCandidate}` : "kept boundary"} after ${simple.candidatesTested || 0} candidates (${simple.guardReason || "no guard reason"}${rawNote})`,
+        `Boundary simplifier metrics: edge ${(Number.isFinite(simple.baselineEdgeRmse) ? simple.baselineEdgeRmse * 100 : 0).toFixed(2)}% -> ${(Number.isFinite(simple.selectedEdgeRmse) ? simple.selectedEdgeRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(simple.baselineHotPixelRatio) ? simple.baselineHotPixelRatio * 100 : 0).toFixed(1)}% -> ${(Number.isFinite(simple.selectedHotPixelRatio) ? simple.selectedHotPixelRatio * 100 : 0).toFixed(1)}%, paths ${simple.baselinePaths || 0} -> ${simple.selectedPaths || 0}, nodes ${simple.baselineNodes || 0} -> ${simple.selectedNodes || 0} (max ${simple.maxAllowedNodes || 0})`
+      );
+      if (Array.isArray(simple.candidateSummaries) && simple.candidateSummaries.length) {
+        logLines.push(`Boundary simplifier candidates: ${simple.candidateSummaries.map((candidate) => `${candidate.source}/${candidate.variant} edge ${(Number.isFinite(candidate.edgeWeightedRmse) ? candidate.edgeWeightedRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(candidate.hotPixelRatio) ? candidate.hotPixelRatio * 100 : 0).toFixed(1)}%, paths ${candidate.paths}, nodes ${candidate.nodes}${Array.isArray(candidate.guardFailures) && candidate.guardFailures.length ? ` [${candidate.guardFailures.join(", ")}]` : ""}`).join("; ")}`);
+      }
+    }
   }
   if (traced.tonalBanding) {
     const tonal = traced.tonalBanding;
@@ -6619,6 +7539,20 @@ async function traceCurrentImage() {
     }
     if (Array.isArray(tonal.guardFailures) && tonal.guardFailures.length) {
       logLines.push(`Tonal band guard failures: ${tonal.guardFailures.join(", ")}`);
+    }
+  }
+  if (traced.thinStrokeRecovery) {
+    const thin = traced.thinStrokeRecovery;
+    const targetNote = Array.isArray(thin.targets) && thin.targets.length
+      ? thin.targets.map((target) => `${target.color} ${(target.ratio * 100).toFixed(2)}%/${(target.thinCoverage * 100).toFixed(0)}% thin`).join(", ")
+      : "none";
+    logLines.push(
+      `Thin-stroke recovery: ${thin.selected ? `selected ${thin.selectedCandidate}` : "kept base"} after ${thin.candidatesTested || 0} candidates (${thin.guardReason || "no guard reason"})`,
+      `Thin-stroke targets: ${targetNote}`,
+      `Thin-stroke metrics: edge ${(Number.isFinite(thin.baselineEdgeRmse) ? thin.baselineEdgeRmse * 100 : 0).toFixed(2)}% -> ${(Number.isFinite(thin.selectedEdgeRmse) ? thin.selectedEdgeRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(thin.baselineHotPixelRatio) ? thin.baselineHotPixelRatio * 100 : 0).toFixed(1)}% -> ${(Number.isFinite(thin.selectedHotPixelRatio) ? thin.selectedHotPixelRatio * 100 : 0).toFixed(1)}%, paths ${thin.baselinePaths || 0} -> ${thin.selectedPaths || 0}, nodes ${thin.baselineNodes || 0} -> ${thin.selectedNodes || 0}, replaced ${thin.pathsReplaced || 0}, built ${thin.pathsBuilt || 0}`
+    );
+    if (Array.isArray(thin.candidateSummaries)) {
+      logLines.push(`Thin-stroke candidates: ${thin.candidateSummaries.map((candidate) => `${candidate.name} edge ${(Number.isFinite(candidate.edgeWeightedRmse) ? candidate.edgeWeightedRmse * 100 : 0).toFixed(2)}%, hot ${(Number.isFinite(candidate.hotPixelRatio) ? candidate.hotPixelRatio * 100 : 0).toFixed(1)}%, paths ${candidate.paths || 0}, nodes ${candidate.nodes || 0}${Array.isArray(candidate.guardFailures) && candidate.guardFailures.length ? ` [${candidate.guardFailures.join(", ")}]` : ""}`).join("; ")}`);
     }
   }
   if (differenceStats && !differenceStats.error) {

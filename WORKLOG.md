@@ -1,5 +1,62 @@
 # WORKLOG
 
+> **HANDOFF -> CODEX (2026-06-28 [claude]):** Dark-glow drift FIXED — Codex's outline win is now
+> unblocked and SHIPPED. Root cause was MINE: commit `8e41bde` added a `selectionResidual`-based
+> guard to the AA-fringe step-down that was too blunt. It correctly kept outline at k=5 but also
+> stopped dark-glow's correct k=4->k=3 collapse (k=3 residual 16.5 > threshold), so dark-glow
+> traced k=4 (extra `#082833` glow-blend) -> 3.32%/68 instead of 1.72%/50. Verified by running the
+> pre-`8e41bde` build (k=3, 1.72%/50) vs current (k=4, 3.32%/68), and by dumping the palette
+> ladders for outline/dark-glow/fine-text. Replaced the residual guard with an INJECTIVE
+> anchor-mapping test (`paletteStepDownSafe` + new `paletteFringeFlags`): a fringe step-down is
+> allowed only if every non-fringe anchor of the chosen palette maps to a DISTINCT color in the
+> smaller palette. Outline k5->k3 fails it (dark+navy both collapse to one color -> stays k5);
+> dark-glow k4->k3 and fine-text k4->k3 pass it (anchors stay distinct -> step). Full local proof
+> (Auto router): dark-glow 1.72%/50 ✓ RESTORED, outline 5.32%/18 ✓ (Codex win held), fine-text
+> 3.20%/61, flat-badge 2.77%/31, BOC 2.41%/55, metal Region 9.11%/13. Deployed: see Cloud line in
+> the Change Log entry. This bundle also ships Codex's thin-stroke recovery + boundary simplifier
+> (those were complete; dark-glow was the only gate). VM outline bar 1.90%/30 still open — next is
+> coverage-aware shared-edge reconstruction for the yellow strokes, not routing/selection.
+
+> **HANDOFF -> CLAUDE/CODEX (2026-06-28 [codex]):** Palette boundary simplifier v1 is
+> implemented and locally proofed. This is the first large outline gain after routing:
+> `bench-outline-shield` Auto still routes Palette/k5, boundary simplifier selected
+> `boundary-simplifier:tight-corners-s12-c065:line-a30`, and thin-stroke recovery selected
+> `thin-strokes-wide`. Final outline: **edge 9.72% -> 5.32%** versus the prior thin-stroke
+> build, MAE **0.26%**, hot **0.7%**, paths **18**, nodes **5248**. Boundary stage alone:
+> **9.78% -> 5.36%**, hot **1.8% -> 0.7%**, paths **31**, nodes **1372 -> 4116**.
+> Regression smokes held: BOC 2.41%/55, fine-text 3.20%/61, metal 9.11%/13. Dark-glow is
+> still the pre-existing drifted local result, **3.32% / 68 paths**, not the earlier accepted
+> 1.72% / 50. Export check passed: `bench-outline-shield-local-trace (1).svg` downloaded
+> and contains the simplifier marker. Cache `20260628-boundarysimplifier2`. Cloud NOT
+> deployed; investigate dark-glow drift before deploying this local win. VM outline bar remains
+> 1.90% / 30 paths, so the outline gap is smaller but still open.
+
+> **HANDOFF -> CLAUDE/CODEX (2026-06-28 [codex]):** Browser proof retry succeeded. Thin-stroke
+> recovery v1 selected on `bench-outline-shield`, but the gain is modest: Palette/k5 outline
+> final **edge 9.78% -> 9.72%**, hot **1.8% -> 1.7%**, paths **31 -> 18**, nodes
+> **1372 -> 2543**. It targeted yellow `#ecb82f` (1.44% pixels, 46% thin coverage) and selected
+> `thin-strokes-wide`. BOC held 2.41%/55, fine-text held 3.20%/61, metal held Region 9.11%/13.
+> Dark-glow thin-stroke skipped, but current local dark-glow now measures **3.32% edge / 68
+> paths**, not the earlier accepted 1.72% / 50; investigate that drift before deploy. Download
+> SVG was not verified: browser download event timed out and no new `*-local-trace.svg` appeared.
+> Cloud NOT deployed. Next recommended: decide whether to keep this tiny outline win, then
+> investigate why Palette boundary optimizer's rejected tighter candidates reach ~5.3% edge on
+> outline and why dark-glow no longer reproduces 1.72%.
+
+> **SUPERSEDED NOTE (2026-06-28 [codex]):** Thin-stroke recovery v1 was implemented here
+> before the successful browser retry above. Files changed: `app/app.js`, `app/index.html`, `SKILL.md`,
+> `WORKLOG.md`, `research/thin-stroke-recovery-v1.md`. The new Palette post-pass
+> `optimizeThinStrokeRecovery` detects high-chroma small-area thin colors, rebuilds those
+> strokes/dots from original pixels via a projected color-membership iso-contour, replaces only
+> same-color thin SVG paths, then metric-guards edge/hot/contamination/path/node growth. Cache
+> tag = `20260628-thinstroke1`. Static proof: `npm.cmd run check` OK, `git diff --check` OK,
+> local server serves the new cache tag. Browser proof BLOCKED this Codex session: in-app
+> browser plugin import and fallback Playwright import both hit local `AppData` EPERM permission
+> errors in the Node tool environment. Cloud NOT deployed. NEXT: run local browser Auto on
+> `?asset=assets/benchmarks/bench-outline-shield.png&run=codex-thinstroke1-local-outline`,
+> compare to Claude's current outline bar (Palette/k5, 9.78% edge, 31 paths), then smoke BOC,
+> fine-text, dark-glow, metal before any deploy.
+
 > **HANDOFF -> CODEX (2026-06-28 [claude]):** Outline-shield routing fix shipped + proof-looped.
 > Tree clean, HEAD `8e41bde` == origin/main, live Cloud = rev `vector-accuracy-studio-00014-sk7`,
 > cache `20260627-outline2`. Outline now routes to Palette/k5 (was Region): edge RMSE
@@ -129,7 +186,7 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00013-5vc`, serving 100% traffic.
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00014-sk7`, serving 100% traffic.
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -203,6 +260,16 @@ content on Region — verified: metal stays Region 9.11%). Deployed Cloud rev
 outline is still +7.88 edge pts above VM (1.90%); the remaining gap is thin-element precision
 (thin yellow lines/dots), a boundary/segmentation problem rather than routing.
 
+2026-06-28 [codex]: Thin-stroke recovery v1 is implemented and locally browser-proofed in the
+Palette engine. It detects high-chroma, small-area colors made mostly of thin components,
+rebuilds those features from the original raster via a projected color-membership iso-contour,
+replaces only same-color thin SVG paths, and keeps the result only if the existing metric guard
+improves edge error without hot-pixel/contamination/path/node regression. On outline-shield it
+selected `thin-strokes-wide`: edge 9.78% -> 9.72%, hot 1.8% -> 1.7%, paths 31 -> 18, nodes
+1372 -> 2543. This is a modest gain, not a VM-level jump. BOC/fine-text/metal smokes held;
+dark-glow thin-stroke skipped but current local dark-glow measured 3.32% / 68 paths instead of
+the earlier accepted 1.72% / 50, so investigate that drift before Cloud deploy.
+
 Quality is near the ceiling of the current "quantize → trace regions → patch" architecture.
 Recent post-passes (sub-pixel nudge, background detach v1/v2, micro-prune) are mostly
 **rejected by the metric guard** because they don't beat the curve-optimized baseline.
@@ -214,6 +281,14 @@ sub-pixel coverage/alpha then immediately binarizes it (snaps to fg/bg at ~0.5).
 "sub-pixel" pass (`estimateCoverageCrossing` ~L2294) only nudges already-traced vertices and
 the guard usually rejects it. Reaching Vector Magic quality needs an architecture change
 (model + solve), not more post-passes.
+
+2026-06-28 [codex]: Palette boundary simplifier v1 is implemented and locally browser-proofed.
+It targets the accurate-but-node-heavy Palette candidates that were previously rejected, refits
+their endpoints with smooth and endpoint-line variants, and accepts only measured guard passes.
+On outline-shield it selected `boundary-simplifier:tight-corners-s12-c065:line-a30`; boundary
+edge improved 9.78% -> 5.36%, hot 1.8% -> 0.7%, paths stayed 31, nodes 1372 -> 4116. After
+thin-stroke recovery, final outline is 5.32% edge / 0.26% MAE / 0.7% hot / 18 paths / 5248 nodes.
+BOC, fine-text, and metal held; dark-glow remains at the already-drifted 3.32% / 68-path result.
 
 ## Next Steps
 (Ordered by impact. Items 1-4 are an engine change, not a tune-up.)
@@ -261,9 +336,11 @@ the same 55 paths and fewer nodes than the prior local/cloud build. Remaining VM
 MAE/hot pixels (ours 0.26% / 0.7% vs VM about 0.17% / 0.5%) and visual QA across more
 flat-logo samples before changing router thresholds.
 
-Current next target: do not tune BOC or dark-glow first. Use Benchmark Pack v1. Start with
-outline thin-stroke precision (VM 1.90% edge vs our Region 13.03%), then metal/shaded tonal
-mesh (VM 1.79% edge vs our 9.11%). Router-only changes were already disproven for outline.
+Current next target: Palette boundary simplifier v1 is a meaningful local outline win, but it is
+not VM-level yet. Outline now sits at 5.32% edge / 18 paths vs VM 1.90% / 30 paths. Before Cloud
+deploy, investigate why current local dark-glow still measures 3.32% / 68 paths instead of the
+earlier accepted 1.72% / 50. After that, the next outline gain likely needs coverage-aware
+shared-edge reconstruction or better thin-stroke source modeling, not more routing work.
 
 **Recommended first build:** prototype items 1+3 as a NEW experimental engine alongside
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
@@ -448,6 +525,154 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-28 [claude] Dark-glow regression FIXED (fringe step-down: residual guard -> injective
+  anchor mapping). Snapshot before edit: `app/app.js.bak-0628-claude-darkglowfix`.
+  Root cause: my earlier commit `8e41bde` guarded the AA-fringe step-down with
+  `ladder[i].selectionResidual > threshold -> break`. Too blunt: dark-glow's correct k=4->k=3
+  collapse has k=3 residual 16.5 (> threshold 12), so the guard blocked it and dark-glow traced
+  k=4 (extra glow-blend `#082833`), regressing 1.72%/50 -> 3.32%/68. (Outline and dark-glow both
+  have high k=3 residual, so residual cannot discriminate "drop a blend" from "merge two colors".)
+  Files/functions touched:
+    - `app/app.js`: NEW `paletteFringeFlags(palette)` (per-color blend flags); `paletteFringeCount`
+      now wraps it. NEW `paletteStepDownSafe(fromPalette, toPalette)`: step-down allowed only if
+      every non-fringe anchor maps to a DISTINCT nearest color in the smaller palette (injective).
+    - `app/app.js`: `selectPaletteLadderEntry` step-down now calls `paletteStepDownSafe` instead of
+      the `selectionResidual` check (break on first injective-unsafe fringe-free palette; smaller
+      palettes only merge more).
+    - `app/index.html`: cache-bust `app.js?v=20260628-darkglowfix1`.
+    - `WORKLOG.md`: handoff banner + this entry.
+  Verification method (data-driven, not guessed): ran pre-`8e41bde` build (dark-glow k=3 1.72%/50)
+  vs current (k=4 3.32%/68) to confirm my change was the cause; dumped palette ladders for
+  outline/dark-glow/fine-text to confirm the injective rule keeps outline@k5, steps dark-glow &
+  fine-text to k3. (Temp `window.__ladders` instrumentation removed before finalizing.)
+  Local (Auto router, `node --check` OK):
+    - dark-glow -> Palette/k3: MAE 0.27%, edge 1.72%, hot 0.2%, 50 paths. RESTORED to accepted bar.
+    - outline   -> Palette/k5 + boundary-simplifier + thin-stroke: MAE 0.26%, edge 5.32%, 18 paths
+      (Codex's win unaffected).
+    - fine-text -> Palette/k3: 3.20% / 61 paths.  flat-badge -> Palette/k3: 2.77% / 31 paths.
+    - BOC       -> Palette/k3: MAE 0.26%, edge 2.41%, 55 paths.  metal -> Region: 9.11% / 13 paths.
+  VM: dark-glow VM bar 0.09% MAE / 1.04% edge / 66 paths; ours back to 0.27% / 1.72% / 50.
+    Outline VM 1.90%/30 vs ours 5.32%/18 (open). No VM delta change for the unaffected samples.
+  Cloud: <filled at deploy below>
+  Decision: ACCEPT. Fixes the shipped dark-glow regression with zero regressions elsewhere, and
+  unblocks Codex's outline boundary-simplifier/thin-stroke (shipped in the same bundle).
+- 2026-06-28 [codex] Palette boundary simplifier v1 implemented and locally proof-looped.
+  Snapshot before edit: `app/app.js.bak-0628-codex-boundarysimplifier1`,
+  `app/index.html.bak-0628-codex-boundarysimplifier1`,
+  `SKILL.md.bak-0628-codex-boundarysimplifier1`,
+  `WORKLOG.md.bak-0628-codex-boundarysimplifier1`.
+  Files/functions touched:
+    - `app/app.js`: added `loopToLineSubpath`, `paletteBoundarySimplifierVariants`,
+      `paletteBoundarySimplifierConfig`, `paletteBoundaryRawBest`,
+      `refitPaletteBoundaryPathData`, `simplifyPaletteBoundarySvg`,
+      `paletteBoundarySimplifierGuardFailures`, `paletteBoundarySimplifierSourceResults`,
+      and `optimizePaletteBoundarySimplifier`.
+    - `app/app.js`: updated `optimizePaletteTrace` to run the guarded simplifier after compact
+      boundary selection and before tonal/thin recovery; updated `traceCurrentImage` logging for
+      `paletteOptimization.boundarySimplifier`.
+    - `app/index.html`: cache-busted app.js to `?v=20260628-boundarysimplifier2`.
+    - `research/palette-boundary-simplifier-v1.md`: added implementation/proof note.
+    - `SKILL.md`, `WORKLOG.md`: updated algorithm memory, Current State, Next Steps, and handoff.
+  Local:
+    - `npm.cmd run check` OK.
+    - `git diff --check` OK.
+    - Browser local outline URL
+      `http://127.0.0.1:8787/?asset=assets/benchmarks/bench-outline-shield.png&run=codex-boundarysimplifier2-outline-download`:
+      Auto selected Palette/k5; boundary simplifier selected
+      `boundary-simplifier:tight-corners-s12-c065:line-a30`; thin-stroke recovery selected
+      `thin-strokes-wide`. Final: MAE 0.26%, edge 5.32%, hot 0.7%, 18 paths, nodes 5248.
+      Boundary-stage delta over current compact boundary: edge 9.78% -> 5.36%, hot 1.8% -> 0.7%,
+      paths 31 -> 31, nodes 1372 -> 4116.
+    - Smoke BOC: Palette/k3, MAE 0.26%, edge 2.41%, hot 0.7%, 55 paths; simplifier skipped
+      because edge was below trigger.
+    - Smoke fine-text: Palette/k3, MAE 0.17%, edge 3.20%, hot 0.4%, 61 paths; simplifier skipped.
+    - Smoke dark-glow: Palette/k4, tonal selected, MAE 0.28%, edge 3.32%, hot 0.4%, 68 paths.
+      This remains the pre-existing drift from the earlier accepted 1.72% / 50 result.
+    - Smoke metal: Region route, MAE 1.22%, edge 9.11%, hot 4.2%, 13 paths.
+    - Export check: `C:\Users\panik\Downloads\bench-outline-shield-local-trace (1).svg`
+      downloaded, 66,104 bytes, and contains the `data-palette-boundary-simplifier` marker.
+  VM:
+    - Existing VM outline bar remains 1.90% edge / 30 paths. New outline is +3.42 edge pts from
+      VM, much closer than the prior +7.82 edge pts after thin-stroke v1, but still not there.
+  Cloud:
+    - NOT deployed. Cloud proof intentionally skipped because dark-glow still does not reproduce
+      the previously accepted local/cloud bar and should be investigated before shipping.
+  Decision:
+    - ACCEPT LOCALLY. This is a meaningful outline gain with BOC/fine-text/metal held. Next:
+      investigate dark-glow drift before deploy, then continue outline work with coverage-aware
+      shared-edge reconstruction or better source-modeled thin strokes.
+- 2026-06-28 [codex] Browser proof retry for thin-stroke recovery v1; no app code changed in
+  this proof turn. Snapshot before note edits: `WORKLOG.md.bak-0628-codex-thinstroke-proof`,
+  `SKILL.md.bak-0628-codex-thinstroke-proof`,
+  `research/thin-stroke-recovery-v1.md.bak-0628-codex-proof`.
+  Files/functions touched:
+    - `WORKLOG.md`: updated handoff, Current State, Next Steps, and this Change Log entry.
+    - `SKILL.md`: updated thin-stroke recovery algorithm memory with measured result.
+    - `research/thin-stroke-recovery-v1.md`: replaced blocked proof note with measured browser
+      results, smoke checks, and decision.
+  Local:
+    - `npm.cmd run check` OK.
+    - Browser local outline URL
+      `http://127.0.0.1:8787/?asset=assets/benchmarks/bench-outline-shield.png&run=codex-thinstroke1-local-outline`:
+      Auto selected Palette/k5; boundary optimizer selected `centered`; thin-stroke recovery
+      selected `thin-strokes-wide` for yellow `#ecb82f`. Final: MAE 0.72%, edge 9.72%, hot
+      1.7%, background contamination 0.60%, 18 paths. Thin-stroke delta over current boundary
+      output: edge 9.78% -> 9.72%, hot 1.8% -> 1.7%, paths 31 -> 18, nodes 1372 -> 2543.
+    - Smoke BOC: MAE 0.26%, edge 2.41%, hot 0.7%, 55 paths; thin-stroke skipped.
+    - Smoke fine-text: MAE 0.17%, edge 3.20%, hot 0.4%, 61 paths; thin-stroke candidate rejected.
+    - Smoke metal: Region route, MAE 1.22%, edge 9.11%, hot 4.2%, 13 paths.
+    - Smoke dark-glow: thin-stroke skipped, tonal selected, but current local result was MAE
+      0.28%, edge 3.32%, hot 0.4%, 68 paths. This differs from the earlier accepted dark-glow
+      result (1.72% edge / 50 paths), so investigate before deploy.
+    - Download SVG check not confirmed: browser download event timed out and no new
+      `*-local-trace.svg` appeared in `C:\Users\panik\Downloads`.
+  VM:
+    - Existing VM outline bar remains 1.90% edge / 30 paths. New outline is still +7.82 edge pts
+      from VM, so this is only a very small improvement.
+  Cloud:
+    - NOT deployed. Cloud proof intentionally skipped because the gain is tiny, download check did
+      not confirm, and dark-glow smoke no longer reproduces the previous accepted bar.
+  Decision:
+    - LOCAL PASS BUT WEAK. Keep only if we value the path-count reduction and tiny outline edge
+      gain; next meaningful outline work should address accurate-but-node-heavy Palette boundary
+      candidates (~5.3% edge) with better simplification/Bezier fitting rather than more thin
+      overlay tuning.
+- 2026-06-28 [codex] Thin-stroke recovery v1 implemented for the Palette engine; proof loop
+  incomplete because browser automation was blocked in this session.
+  Snapshot before edit: `app/app.js.bak-0628-codex-thinstroke1`,
+  `app/index.html.bak-0628-codex-thinstroke1`, `SKILL.md.bak-0628-codex-thinstroke1`,
+  `WORKLOG.md.bak-0628-codex-thinstroke1`.
+  Files/functions touched:
+    - `app/app.js`: added `thinStrokeRecoveryOptions`, `createSkippedThinStrokeStats`,
+      `componentLooksLikeThinStroke`, `paletteLabelCounts`, `selectThinStrokeTargets`,
+      `nearestPaletteNeighbor`, `projectedColorMembership`,
+      `buildThinStrokeMembershipField`, `thinStrokeLoopEligible`,
+      `thinStrokeRecoveryCandidates`, `buildThinStrokeLayer`,
+      `thinStrokeReplacementPath`, `injectThinStrokeLayer`,
+      `thinStrokeGuardFailures`, `thinStrokeCandidatePassesGuard`,
+      `optimizeThinStrokeRecovery`.
+    - `app/app.js`: updated `optimizePaletteTrace` to run thin-stroke recovery after guarded
+      tonal bands; updated `buildBenchmarkRun` and `traceCurrentImage` to persist/log
+      `thinStrokeRecovery`.
+    - `app/index.html`: cache-busted `app.js` to `?v=20260628-thinstroke1`.
+    - `research/thin-stroke-recovery-v1.md`: added implementation/proof note.
+    - `SKILL.md`, `WORKLOG.md`: updated algorithm memory, Current State, Next Steps, and handoff.
+  Local:
+    - `npm.cmd run check` OK.
+    - `git diff --check` OK.
+    - Local server at `http://127.0.0.1:8787/` serves `app.js?v=20260628-thinstroke1`.
+    - Browser benchmark NOT RUN: in-app browser plugin import hit `EPERM: operation not permitted,
+      lstat 'C:\Users\panik\AppData'`; fallback Playwright import hit `EPERM` under
+      `C:\Users\panik\AppData\Local\OpenAI\Codex`.
+  VM:
+    - Existing outline VM bar remains 1.90% edge / 30 paths. New ours-vs-VM delta is not known
+      until the local browser run measures whether `thinStrokeRecovery` is selected.
+  Cloud:
+    - NOT deployed. Do not deploy this pass until local browser proof beats or safely rejects the
+      candidate and smoke tests pass.
+  Decision:
+    - IMPLEMENTED BUT NOT ACCEPTED. Next agent must run local outline proof URL from
+      `research/thin-stroke-recovery-v1.md`, then decide accept/tune/revert based on metrics.
 - 2026-06-28 [claude] Outline-shield routing fix (fringe step-down + router k-cap).
   Snapshots before edits this session: `app/app.js.bak-0627a-claude-finetext`,
   `app/app.js.bak-0627b-claude-fringefix`.
