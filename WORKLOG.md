@@ -1,5 +1,21 @@
 # WORKLOG
 
+> **HANDOFF -> CODEX (2026-06-28 [claude]):** Outline-shield routing fix shipped + proof-looped.
+> Tree clean, HEAD `8e41bde` == origin/main, live Cloud = rev `vector-accuracy-studio-00014-sk7`,
+> cache `20260627-outline2`. Outline now routes to Palette/k5 (was Region): edge RMSE
+> **13.03% -> 9.78%**, MAE 0.73%, 31 paths. Two fixes in `app.js`: (1) `selectPaletteLadderEntry`
+> AA-fringe step-down now only falls back to a fringe-free palette when its `selectionResidual`
+> is within threshold (was over-collapsing outline k5->k3 and merging navy interior into the dark
+> bg — a bug I introduced with the fine-text fringe fix); (2) `autoRouteFromPaletteLadder` k cap
+> raised 4 -> 6 so a CLEAN high-k flat palette routes to Palette (core/full residual + edge-signal
+> guards still hold shaded content on Region). NO regressions: metal stays Region 9.11%, fine-text
+> 3.20%/61, BOC 2.41%/55, dark-glow untouched. REMAINING on outline: still +7.88 edge pts vs VM
+> 1.90% — the residual is genuine thin-element precision (thin yellow lines/dots), a deeper
+> segmentation/boundary problem, NOT a routing issue. Next targets unchanged: outline thin-stroke
+> precision, then metal shaded mesh. See QA report `research/qa-2026-06-27-claude.md` for W1-W3
+> action items. Note: Claude_Preview can't drive the remote, so Cloud was verified by HTTP (new
+> cache tag + new router code present) on the byte-identical pushed build.
+
 > **HANDOFF -> CLAUDE/CODEX (2026-06-27 [codex]):** Dark-glow tonal banding v1 is implemented,
 > deployed, and proof-loop tested. Live Cloud = rev `vector-accuracy-studio-00013-5vc`, cache
 > `20260627-glowband2`. The Palette engine now adds a guarded dark-background tonal-band layer
@@ -173,6 +189,19 @@ Palette exception. Local and Cloud dark-glow Auto results match: MAE 0.27%, edge
 hot 0.2%, 50 paths. VM reference remains better at MAE 0.09% / edge 1.04% / hot 0.09% / 66 paths,
 but this is a real measured gain from the previous local MAE 2.04% / edge 3.86%. BOC smoke stayed
 Palette 55 paths / 2.41% edge and tonal bands skipped; outline smoke stayed Region.
+
+2026-06-28 [claude]: Outline-shield routing fixed (picked up Codex's "outline thin-stroke
+precision first" target — routing portion). Outline now Auto-routes to Palette/k5 instead of
+Region: edge RMSE 13.03%->9.78%, MAE 0.73%, 31 paths. Fixed two things in `app.js`:
+`selectPaletteLadderEntry`'s AA-fringe step-down was over-collapsing the clean k5 palette to k3
+(merging the navy interior into the dark background — a bug from the fine-text fringe fix); it now
+only steps down when the fringe-free fallback's `selectionResidual` is within threshold. And
+`autoRouteFromPaletteLadder`'s small-palette gate was raised from k<=4 to k<=6 so a CLEAN high-k
+flat palette routes to Palette (the core/full residual + edge-signal guards still keep shaded
+content on Region — verified: metal stays Region 9.11%). Deployed Cloud rev
+`vector-accuracy-studio-00014-sk7`, cache `20260627-outline2`. This is a real but PARTIAL win:
+outline is still +7.88 edge pts above VM (1.90%); the remaining gap is thin-element precision
+(thin yellow lines/dots), a boundary/segmentation problem rather than routing.
 
 Quality is near the ceiling of the current "quantize → trace regions → patch" architecture.
 Recent post-passes (sub-pixel nudge, background detach v1/v2, micro-prune) are mostly
@@ -419,6 +448,35 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-28 [claude] Outline-shield routing fix (fringe step-down + router k-cap).
+  Snapshots before edits this session: `app/app.js.bak-0627a-claude-finetext`,
+  `app/app.js.bak-0627b-claude-fringefix`.
+  Files/functions touched:
+    - `app/app.js`: `selectPaletteLadderEntry` — AA-fringe step-down now requires the fringe-free
+      fallback's `selectionResidual <= threshold` before stepping down (fixes over-collapse of
+      outline k5->k3 that merged two distinct dark blues / navy interior into bg).
+    - `app/app.js`: `autoRouteFromPaletteLadder` — `smallPalette` gate raised `chosen.k <= 4` to
+      `chosen.k <= 6`; failure message updated to `k <N> > 6`. Core/full residual + edge-signal
+      guards unchanged.
+    - `app/index.html`: cache-busted `app.js` to `?v=20260627-outline2`.
+    - `WORKLOG.md`: handoff banner, Current State entry, this Change Log entry.
+  Local (`node --check` OK; browser Auto via preview server, full benchmark pack):
+    - outline AUTO -> Palette/k5: edge RMSE 13.03%->9.78%, MAE 0.73%, 31 paths.
+    - metal AUTO -> Region 9.11% (no change — guard holds shaded content).
+    - fine-text AUTO -> Palette/k3: 3.20% edge / 61 paths (no change).
+    - BOC AUTO -> Palette/k3: MAE 0.26%, edge 2.41%, hot 0.7%, 55 paths (no change).
+  VM:
+    - Outline VM bar 1.90% edge / 30 paths; ours now 9.78% / 31 paths -> closed ~3.25 edge pts but
+      still +7.88 pts. Partial win; thin-element precision residual remains (separate follow-up).
+    - No VM delta change for metal / fine-text / BOC (those samples unchanged).
+  Cloud:
+    - Deployed `vector-accuracy-studio --source .` -> rev `vector-accuracy-studio-00014-sk7`,
+      serving 100%. Verified live: `index.html` serves `app.js?v=20260627-outline2` and the
+      deployed `app.js` contains the new `chosen.k <= 6` router code. Functional re-run on Cloud
+      not scripted (Claude_Preview can't drive the remote); the pushed build is byte-identical to
+      the locally-proven one (same commit `8e41bde`).
+  Decision: ACCEPT. Outline improves with zero regressions across the rest of the pack; change is
+  a routing/selection fix only. Outline-vs-VM precision gap stays OPEN as a boundary problem.
 - 2026-06-27 [codex] Dark-glow tonal banding v1 implemented, measured, and deployed.
   Snapshot before edit: `app/app.js.bak-0627-codex-glowband1` and
   `app/index.html.bak-0627-codex-glowband1`.
