@@ -186,7 +186,9 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00014-sk7`, serving 100% traffic.
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00015-tq6`, serving 100% traffic
+(cache `20260628-darkglowfix1`; outline boundary-simplifier + thin-stroke + dark-glow injective
+fringe fix all live).
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -553,7 +555,10 @@ NOT curve fitting. (Schneider may still help curve cleanliness later, with tight
     - BOC       -> Palette/k3: MAE 0.26%, edge 2.41%, 55 paths.  metal -> Region: 9.11% / 13 paths.
   VM: dark-glow VM bar 0.09% MAE / 1.04% edge / 66 paths; ours back to 0.27% / 1.72% / 50.
     Outline VM 1.90%/30 vs ours 5.32%/18 (open). No VM delta change for the unaffected samples.
-  Cloud: <filled at deploy below>
+  Cloud: deployed rev `vector-accuracy-studio-00015-tq6`, serving 100%. Verified live that
+    `index.html` serves `app.js?v=20260628-darkglowfix1` and the deployed `app.js` contains
+    `paletteStepDownSafe`. Functional re-run on Cloud not scripted (Claude_Preview can't drive the
+    remote); the pushed build is byte-identical to the locally-proven one (commit `ba5a1d0`).
   Decision: ACCEPT. Fixes the shipped dark-glow regression with zero regressions elsewhere, and
   unblocks Codex's outline boundary-simplifier/thin-stroke (shipped in the same bundle).
 - 2026-06-28 [codex] Palette boundary simplifier v1 implemented and locally proof-looped.
