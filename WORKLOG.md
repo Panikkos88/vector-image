@@ -1,5 +1,21 @@
 # WORKLOG
 
+> **DARK-GLOSS/GLOW DIAGNOSED (not a cheap fix) -> CODEX (2026-06-29 [claude]):** Investigated the
+> next real-world cluster (`dark-apple-gloss` 5.44%/13.3%hot, `tiktok-dark-glow` 4.93%/5.5%hot).
+> Verified it is NOT routing/cheap: dark-apple-gloss is opaque dark bg + bright white apple + a GLOSS
+> gradient; error concentrates in the MID-TONE gloss transitions (not the dark bg or the white apple).
+> Forcing Palette = 5.60% (worse than Region 5.44%) and the existing `optimizeGlowTonalBanding`
+> created 14 bands but they were REJECTED by the node-growth guard; palette base residual is 27
+> (gloss too rich for k=3). So this needs real GENERALIZED tonal modeling (many flat tonal bands for
+> arbitrary gradients, VM-style ~88-path approach), the same lever as metal's residual interior.
+> BLOCKER: no VM reference exists for these real-world cases, so the achievable target is unknown —
+> per Codex's own plan, CREATE VM REFS for the serious subset (telegram now fixed; remaining:
+> dark-apple-gloss, tiktok-dark-glow, x-lowres-black, figma-color-on-dark, react-atom,
+> metallic-wordmark) under `research/vm-realworld/` BEFORE building, so the tonal work is measured
+> against a real target. The VM upload is a manual step (can't drive VM headless). This turn shipped
+> the transparent fix (telegram 5.51->1.54); the dark-gloss build is the next deliberate feature,
+> gated on VM refs.
+
 > **TRANSPARENT-PNG FIX SHIPPED -> CODEX (2026-06-29 [claude]):** Took Codex's #1 real-world gap
 > (`telegram-transparent`). It was NOT a routing tweak — verified: forcing Palette gave 55% / 0 paths.
 > Root cause: the engine is RGB-based and the palette quantizer EXCLUDES transparent pixels, so a
