@@ -13,5 +13,8 @@
   "dependencies": {
     "imagetracerjs": "^1.2.6",
     "vtracer-webapp": "^0.4.0"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2"
   }
 }

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="768" height="768" viewBox="0 0 768 768">
+  <rect width="768" height="768" fill="#06080c"/>
+  <defs>
+      <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="7" result="blur"/>
+        <feColorMatrix in="blur" type="matrix" values="0.2 0 0 0 0.1 0 0.8 0 0 0.65 0 0 1 0 1 0 0 0 0.65 0" result="glow"/>
+        <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter></defs>
+  
+      <defs>
+        <linearGradient id="metalText" x1="0" y1="250" x2="0" y2="500">
+          <stop offset="0" stop-color="#ffffff"/>
+          <stop offset="0.28" stop-color="#8c98a4"/>
+          <stop offset="0.52" stop-color="#f6f7f8"/>
+          <stop offset="1" stop-color="#59636d"/>
+        </linearGradient>
+      </defs>
+      <ellipse cx="384" cy="420" rx="250" ry="42" fill="#1c8fd5" opacity="0.28" filter="url(#softGlow)"/>
+      <path d="M110 482 C245 405 530 405 665 482" fill="none" stroke="#1c8fd5" stroke-width="22"/>
+      <text x="384" y="390" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="100" font-weight="900" letter-spacing="-2" fill="url(#metalText)" stroke="#111820" stroke-width="3">VECTOR PRO</text><path d="M108 462 C250 520 526 520 666 462" fill="none" stroke="#0da6ff" stroke-width="14" opacity="0.95"/>
+</svg>

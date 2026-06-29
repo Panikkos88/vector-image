@@ -1,5 +1,29 @@
 # WORKLOG
 
+> **REAL-WORLD LOGO PACK RUN -> CLAUDE/CODEX (2026-06-29 [codex]):** Ran the full
+> 24-logo real-world seed pack locally and on Cloud. Results are byte/path/metric-equivalent
+> across local `http://127.0.0.1:8787/` and Cloud revision `vector-accuracy-studio-00020-c4z`.
+> Reports: `research/real-logo-seed-pack/local-realworld-results-2026-06-29.{json,md}`,
+> `cloud-realworld-results-2026-06-29.{json,md}`, and
+> `local-vs-cloud-realworld-2026-06-29.md`. Average edge RMSE 2.73%, average hot pixels
+> 1.30%, average paths 14.7. Main gaps are no longer flat logos: worst targets are
+> `telegram-transparent` 5.51 edge, `dark-apple-gloss` 5.44 edge / 13.3 hot,
+> `tiktok-dark-glow` 4.93 edge / 5.5 hot, `x-lowres-black` 4.26 edge, `figma-color-on-dark`
+> 4.23 edge, plus `react-atom` and `metallic-wordmark-generated` at 4.09 edge. NEXT:
+> create Vector Magic refs for those serious failures first, then choose whether the next build is
+> transparent-input routing/background semantics or generalized dark-glow/metal tonal modeling.
+
+> **REAL-WORLD LOGO SEED PACK -> CLAUDE/CODEX (2026-06-29 [codex]):** Added a reproducible
+> 24-sample real-world-ish logo validation seed pack. PNG inputs live in
+> `app/assets/benchmark-realworld/`; manifest is `app/assets/benchmark-realworld/manifest.json`;
+> source/composed SVGs + contact sheet + report live in `research/real-logo-seed-pack/`. Tool:
+> `tools/gather-real-logo-seed-pack.js` using `@resvg/resvg-js` dev dependency. Sources are mostly
+> Simple Icons SVGs (CC0-1.0, trademarks remain with owners; internal benchmark only) plus two
+> generated stress cases. Categories include flat marks, thin curves, dense small components,
+> fine text, transparent input, dark glow, low-res hard edge, gradient panel, generated multi-color,
+> and metallic wordmark. No app code/engine changed. NEXT: run ours on all 24 locally/Cloud, then
+> upload the serious subset to Vector Magic and save VM SVG refs under `research/vm-realworld/`.
+
 > **METAL FIXED -> CODEX (2026-06-28 [claude]):** Super-sampling extended to the REGION engine took
 > metal **9.11% -> 2.83%** edge (VM 1.79% — from a 7.3pt gap to ~1pt). Diagnosis: metal = smooth grey
 > gradient + dark text + blue accent; the dark text/blue are SEPARATE regions but traced at 1x, so
@@ -323,7 +347,7 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00019-6w9`, serving 100% traffic
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00020-c4z`, serving 100% traffic
 (cache `20260628-regionsuper1`; all of: outline boundary-simplifier + thin-stroke + dark-glow
 injective fringe fix + AA-fringe dissolve + 2x super coverage tracing + sub-pixel topology super
 (palette) + Region engine super re-trace). ALL 6 benchmarks now at/near VM edge:
@@ -341,6 +365,18 @@ Benchmark Pack v1 is now available. Generated, license-safe PNGs live under
 Vector Magic fill-only SVG references live under `research/vm-benchmarks/`; raw measured
 results live in `research/benchmark-results-2026-06-27.json`; summary is in
 `research/benchmark-pack-v1.md`.
+Real-world logo seed pack v1 is now available for validation beyond synthetic tests.
+PNG inputs live under `app/assets/benchmark-realworld/`; hidden test loading uses
+`?asset=assets/benchmark-realworld/<file>.png`; manifest is
+`app/assets/benchmark-realworld/manifest.json`; source/composed SVGs, contact sheet, and
+notes live in `research/real-logo-seed-pack/`. These are internal benchmark assets; most
+source marks come from Simple Icons CC0 with brand/trademark caveats.
+The 24-logo pack has now been run locally and on Cloud. Local and Cloud matched exactly for
+selected engine, edge RMSE, hot pixels, and path count. Reports live under
+`research/real-logo-seed-pack/`: local/cloud JSON+MD result files plus
+`local-vs-cloud-realworld-2026-06-29.md`. Average edge RMSE is 2.73%; average hot pixels 1.30%;
+average paths 14.7. Flat-logo routing is generally strong; the next real gaps are transparent
+input semantics, dark/glow hot pixels, low-res hard-edge upsampling, and metallic/tonal content.
 
 2026-06-27 [codex]: BOC/KOINO precision pass added an internal Palette boundary optimizer
 behind the hidden dev route `?engine=palette&paletteK=3`. It tests coordinate convention,
@@ -500,6 +536,15 @@ outline at 4.07% edge after Claude's `fringedissolve1`. For the next engine turn
    hidden headroom;
 2. if not, build ROI coverage-aware corner reconstruction at the two shield tips;
 3. only consider backend/diffvg-style optimization after a small local proof shows measurable gain.
+
+2026-06-29 [codex] validation update: real-world logo seed pack local/Cloud traces are complete.
+Use the reports in `research/real-logo-seed-pack/` before more engine work. Next: create Vector
+Magic references only for the serious failures: `telegram-transparent`, `dark-apple-gloss`,
+`tiktok-dark-glow`, `x-lowres-black`, `figma-color-on-dark`, `react-atom`, and
+`metallic-wordmark-generated`. Then pick one focused build target. Current recommendation:
+first fix transparent PNG routing/background semantics because `telegram-transparent` is a pure
+flat logo incorrectly routed to Region due transition ratio 0.0%; after that, target generalized
+dark-glow/metal tonal modeling for the high-hot-pixel Region cases.
 
 **Recommended first build:** prototype items 1+3 as a NEW experimental engine alongside
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
@@ -684,6 +729,60 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-29 [codex] Ran real-world logo seed pack locally and on Cloud; deployed assets to Cloud.
+  Snapshot before doc edits: `WORKLOG.md.bak-0629-codex-realworld-run`,
+  `SKILL.md.bak-0629-codex-realworld-run`.
+  Files/functions touched:
+    - `research/real-logo-seed-pack/local-realworld-results-2026-06-29.json` and `.md`: new
+      local browser batch results for all 24 seed logos.
+    - `research/real-logo-seed-pack/cloud-realworld-results-2026-06-29.json` and `.md`: new
+      Cloud browser batch results for all 24 seed logos.
+    - `research/real-logo-seed-pack/local-vs-cloud-realworld-2026-06-29.md`: new comparison proof;
+      local and Cloud matched exactly on selected engine, edge RMSE, hot pixels, and paths.
+    - `WORKLOG.md`, `SKILL.md`: updated handoff/current state/next steps/result memory.
+  Local:
+    - Full 24/24 batch OK at `http://127.0.0.1:8787/`.
+    - Settings: Auto router, Medium detail, Smooth AA, Balanced sub-pixel, Balanced curve optimizer,
+      Background Detach Off, Preserve glows/shadows.
+    - Average edge RMSE 2.73%, average hot pixels 1.30%, average paths 14.7.
+  Cloud:
+    - Deployed static app/assets to Cloud Run revision `vector-accuracy-studio-00020-c4z`, serving
+      100% traffic.
+    - Verified `assets/benchmark-realworld/flat-github-mark.png` returns `image/png` with expected
+      byte size.
+    - Full 24/24 Cloud batch OK and matched local metrics exactly.
+  VM:
+    - Not run in Vector Magic yet. Recommended VM-ref subset: `telegram-transparent`,
+      `dark-apple-gloss`, `tiktok-dark-glow`, `x-lowres-black`, `figma-color-on-dark`,
+      `react-atom`, `metallic-wordmark-generated`.
+  Checks:
+    - `npm run check` OK.
+  Decision: ACCEPT as the new real-world proof loop. Next build should be chosen from the measured
+    failures, not from the older six-sample pack alone.
+- 2026-06-29 [codex] Real-world logo seed pack v1 added; no app/engine code changed.
+  Snapshot before doc edits: `WORKLOG.md.bak-0629-codex-real-logo-pack`,
+  `SKILL.md.bak-0629-codex-real-logo-pack`.
+  Files/functions touched:
+    - `tools/gather-real-logo-seed-pack.js`: new reproducible gather/render tool. Fetches Simple
+      Icons SVGs where used, composes varied logo stress cases, renders PNGs via `@resvg/resvg-js`,
+      writes source/composed SVGs, manifest, report, and contact sheet.
+    - `package.json`, `package-lock.json`: added dev dependency `@resvg/resvg-js` for benchmark
+      asset generation only.
+    - `app/assets/benchmark-realworld/*`: 24 generated PNG benchmark inputs + `manifest.json`.
+    - `research/real-logo-seed-pack/*`: source SVGs, composed SVGs, contact sheet PNG/SVG, and
+      `real-logo-seed-pack-2026-06-29.md`.
+    - `WORKLOG.md`, `SKILL.md`: updated handoff/current state/next validation step.
+  Local:
+    - `node tools/gather-real-logo-seed-pack.js` OK; generated 24 PNGs.
+    - `npm run check` OK.
+    - `git diff --check` OK.
+    - Contact sheet visually inspected: covers flat, thin, detailed, transparent, dark/glow,
+      low-res, gradient, multi-color, and metallic/text stress cases.
+  VM: not run yet; this pack is input discovery. Next step is selecting/uploading serious samples
+    to Vector Magic and saving refs under `research/vm-realworld/`.
+  Cloud: not deployed/tested; asset/tooling addition only.
+  Decision: ACCEPT as validation infrastructure. Use this before more engine tuning so we do not
+    overfit the six synthetic benchmark samples.
 - 2026-06-28 [claude] Region engine super-sampled final re-trace (metal 9.11% -> 2.83%, VM 1.79%).
   Snapshot: `app/app.js.bak-0628-claude-regionsuper`.
   Diagnosis: metal = smooth grey gradient + dark text + blue accent. Per-class abs error ours vs VM:

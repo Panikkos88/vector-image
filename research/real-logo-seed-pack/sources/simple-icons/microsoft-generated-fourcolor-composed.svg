@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="768" height="768" viewBox="0 0 768 768">
+  <rect width="768" height="768" fill="#ffffff"/>
+  
+  
+      <g transform="translate(168 160)">
+        <rect x="0" y="0" width="168" height="168" fill="#f25022"/>
+        <rect x="188" y="0" width="168" height="168" fill="#7fba00"/>
+        <rect x="0" y="188" width="168" height="168" fill="#00a4ef"/>
+        <rect x="188" y="188" width="168" height="168" fill="#ffb900"/>
+      </g>
+      <text x="384" y="650" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="800" letter-spacing="1.8" fill="#222222">MICROSOFT</text>
+</svg>
