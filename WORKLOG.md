@@ -1,5 +1,19 @@
 # WORKLOG
 
+> **SUPER-SAMPLE SHIPPED -> CODEX (2026-06-28 [claude]):** 2x super-sampled coverage tracing is the
+> lever that broke past the 3.94% 1x floor (Experiment A). New metric-guarded `supersample2` palette
+> boundary candidate: builds the per-region coverage field at 2x by bilinear-sampling the SOURCE at
+> sub-pixel positions (new `bilinearRgb`/`rgbCoverageProjection`/`buildSuperRegionField`;
+> `traceRegionsToSvg` branches on `boundary.superSample>1`). coordinateOffset 0.5 still required;
+> 4x is WORSE (over-samples the still-1x label topology). Broad win, ZERO regression (guarded):
+> outline **4.07->3.65**, fine-text **3.20->3.09**, flat-badge **2.77->2.48 (now BEATS VM 2.51)**,
+> dark-glow **1.72->1.61** (tonal banding intact), BOC unchanged 2.41 (super loses there, stays
+> ~8.5s), metal unaffected (Region). COST the user accepted: traces where super WINS go ~7s ->
+> ~25-39s (2x field-build + simplifier on the denser path). Next obvious optimization for whoever
+> continues: cut that runtime (super-sample only edge bands / skip the giant background region /
+> final-pass-only refine) and/or super-sample the TOPOLOGY too (label map is still 1x — that's what
+> caps us ~3.5% short of VM). Deployed: see Change Log Cloud line.
+
 > **METAL DIAGNOSTIC -> CODEX (2026-06-28 [claude]):** Full write-up in
 > `research/metal-gap-diagnostic-2026-06-28-claude.md`. Metal is NOT a cheap routing fix. VM does
 > metal with **88 FLAT bands, 0 gradients** (edge 1.79%); ours is the Region engine, 13 paths + 1
@@ -279,9 +293,10 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00016-4cr`, serving 100% traffic
-(cache `20260628-fringedissolve1`; outline boundary-simplifier + thin-stroke + dark-glow injective
-fringe fix + AA-fringe dissolve all live).
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00017-z2d`, serving 100% traffic
+(cache `20260628-supersample2x2`; outline boundary-simplifier + thin-stroke + dark-glow injective
+fringe fix + AA-fringe dissolve + 2x super-sampled coverage tracing all live). Benchmark edges:
+BOC 2.41, flat-badge 2.48 (< VM), dark-glow 1.61, fine-text 3.09, outline 3.65, metal 9.11 (Region).
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -637,6 +652,29 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-28 [claude] 2x super-sampled coverage tracing (sub-pixel boundaries). Snapshot:
+  `app/app.js.bak-0628-claude-supersample`.
+  Validated first via an unbounded probe: the 1x candidate space floors at ~3.94% (nothing beat it);
+  2x super-sampling broke past it. Files/functions:
+    - `app/app.js`: NEW `bilinearRgb`, `rgbCoverageProjection`, `buildSuperRegionField`;
+      `traceRegionsToSvg` now branches to a super-sampled field + scaled point mapping when
+      `boundary.superSample>1`; `paletteBoundaryCandidates` gains a guarded `supersample2` candidate
+      (superSample 2, coordinateOffset 0.5, simplify 0.12). Fit object parses `superSample`.
+    - `app/index.html`: cache-bust `app.js?v=20260628-supersample2x2`.
+  Local (Auto, paletteOptimize on; metric-guarded so super only wins where it helps):
+    - outline 4.07%->3.65%; fine-text 3.20%->3.09%; flat-badge 2.77%->2.48% (now < VM 2.51%);
+      dark-glow 1.72%->1.61% (tonal banding intact); BOC 2.41% unchanged (super loses, ~8.5s);
+      metal Region 9.11% unaffected. Hot pixels flat/improved on all.
+    - Runtime where super WINS: ~7s -> ~25-39s (2x field-build + simplifier on denser path). User
+      explicitly chose quality-over-speed default.
+  VM: flat-badge now BEATS VM; outline 3.65 vs 1.90, fine-text 3.09 vs 2.26, dark-glow 1.61 vs 1.04
+    still gapped (capped because the label TOPOLOGY is still 1x — super-sampling only the colour).
+  Cloud: deployed rev `vector-accuracy-studio-00017-z2d`, serving 100%; verified `supersample2x2`
+    tag live and `buildSuperRegionField` present. Functional re-run not scripted on remote
+    (Claude_Preview local only); pushed build byte-identical (commit `34fd06c`).
+  Decision: ACCEPT (user opted in). Broad sub-pixel quality win, regression-safe via metric guard.
+  Follow-up for Codex: cut runtime (edge-band-only / skip background region / final-pass refine) and
+  super-sample TOPOLOGY (1x label map is the remaining cap vs VM).
 - 2026-06-28 [codex] GitHub/public vectorization research pass; no app code changed.
   Snapshot before doc edits: `WORKLOG.md.bak-0628-codex-github-research`,
   `SKILL.md.bak-0628-codex-github-research`.
