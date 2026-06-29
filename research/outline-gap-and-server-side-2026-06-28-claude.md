@@ -97,6 +97,37 @@ compute-multiplier on this same candidate space would plateau ~3.94%. Do not bui
 "search harder". Next must be a NEW model (Experiment B: ROI coverage-aware corner reconstruction).
 The 3.94 vs 4.07 delta is node-heavy and not worth changing the shipped selection.
 
+## Experiment B DIAGNOSTIC RESULT (2026-06-28 [claude]) — premise DISPROVED, do NOT build ROI tip fix
+Before building the ROI corner reconstruction, I verified the failure mode at the tips. It is NOT a
+localized corner/topology defect:
+- Pixel classification maps (D/C/Y/N) at the top tip show OURS ~ VM ~ ORIGINAL nearly identically
+  (same topology, 1-2px diffs). There is no visible cream/navy overshoot to surgically remove.
+- The earlier "dark|navy +81k tip overshoot" was largely a CLASSIFIER ARTIFACT: navy [28,58,92] is
+  colorimetrically BETWEEN dark [24,31,41] and cream [240,240,230], so OUTER cream/dark AA pixels
+  (e.g. [72,77,83]) get nearest-classified as "navy". So that bucket is mostly outer-edge AA, not a
+  literal dark-meets-navy topology problem at the points.
+- Hard per-ROI error (ours vs VM abs error mass): top tip 38k vs 10k; bottom tip 67k vs 11k;
+  **left straight diagonal edge (NO corner) 37k vs 7k (5.4x)**; CREST text 92k vs 53k; whole image
+  717k vs 214k.
+=> The straight-edge ROI being 5.4x worse than VM proves the residual is BROAD sub-pixel AA edge
+PLACEMENT precision along ALL edges (straight + corner), not a corner defect. A targeted ROI corner
+reconstruction (old Experiment B) would not move the metric. Scratch it.
+
+### What this leaves as the ONLY remaining lever (big, uncertain, untested)
+Global sub-pixel boundary precision. Our coverage-projection marching-squares runs at 1x pixel
+resolution; the iso-0.5 contour is linearly interpolated between integer pixel centers and then
+simplified, which is ~0.5px-class imprecise on every edge. VM's edges sit on the true sub-pixel
+coverage line everywhere. The untested idea that is OUTSIDE Experiment A's candidate space:
+**build the per-region coverage field at 2x (or 4x) supersample (bilinear-sample the source),
+run marching-squares at that resolution, then scale coords back down** -> sub-pixel-accurate
+contours on straight edges too. Possibly + curve-fit the result to the coverage line. This is a
+real change to the SHARED `traceRegionsToSvg` field block (regression risk to BOC/fine-text/
+flat-badge/dark-glow + the Region engine), so it MUST be added as a metric-guarded candidate.
+Honest expectation: may reach ~3% but probably not VM's 1.90% (VM likely also has a corner/curve
+model we don't). Effort: substantial. Recommendation: only worth it if outline parity is a hard
+requirement; otherwise bank outline at 4.07% and spend the effort on metal (9.11% vs 1.79%, a
+bigger untouched gap).
+
 ## The actual lever (whoever closes this)
 A coverage-aware CORNER reconstruction at convex points (the tips), so cream/navy stop overshooting
 into the dark background. That's the +81k. Then inner-edge sub-pixel precision for the next +52k.

@@ -1,5 +1,19 @@
 # WORKLOG
 
+> **EXPERIMENT B DIAGNOSTIC -> CODEX (2026-06-28 [claude]):** Premise DISPROVED — do NOT build the
+> ROI tip/corner reconstruction. Verified the tip failure mode first: ours ~ VM topologically at the
+> tips, and the earlier "dark|navy +81k tip overshoot" was mostly a CLASSIFIER ARTIFACT (navy sits
+> between dark and cream in RGB, so outer cream/dark AA pixels classify as "navy"). Hard per-ROI
+> error ours-vs-VM: a STRAIGHT diagonal cream edge (no corner) is 5.4x worse than VM (37k vs 7k) —
+> proving the residual is BROAD sub-pixel AA edge-placement precision on ALL edges, not a corner
+> defect. So a localized ROI fix moves nothing. The only remaining lever is GLOBAL sub-pixel
+> precision: build the per-region coverage field at 2x/4x supersample -> marching-squares ->
+> downscale (+ maybe curve-fit), added as a metric-guarded candidate (shared traceRegionsToSvg, so
+> regression risk to all palette samples + Region engine). Likely reaches ~3% not 1.90%; substantial
+> effort. Recommend banking outline at 4.07% and pivoting to metal (9.11% vs 1.79%) unless outline
+> parity is a hard requirement. Full detail in research/outline-gap-and-server-side-2026-06-28-claude.md.
+> Shipped state unchanged (`fringedissolve1` / rev `00016-4cr`); tree clean, no code changed.
+
 > **EXPERIMENT A RESULT -> CODEX (2026-06-28 [claude]):** Ran the unbounded in-browser palette
 > candidate probe on outline (207 candidates: curated set + wide grid over iso 0.4-0.7 /
 > coordinateOffset -0.5..1.0 / simplifyTolerance / cornerAngle; no time cap; probe code reverted,
