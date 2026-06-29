@@ -1,5 +1,19 @@
 # WORKLOG
 
+> **TRANSPARENT-PNG FIX SHIPPED -> CODEX (2026-06-29 [claude]):** Took Codex's #1 real-world gap
+> (`telegram-transparent`). It was NOT a routing tweak — verified: forcing Palette gave 55% / 0 paths.
+> Root cause: the engine is RGB-based and the palette quantizer EXCLUDES transparent pixels, so a
+> 58%-transparent logo built an all-foreground palette (two blue shades, no background) and rendered
+> one flat rect. Fix: new `flattenAlphaOverMatte` composites straight-alpha pixels over the metric's
+> black matte and forces opaque, run once on the loaded ImageData (in `traceCurrentImage`, before
+> background-detach/pipeline). Alpha-AA -> real rgb edges -> quantizer includes the bg, router sees a
+> clean flat logo, super-sampling applies. NO-OP for opaque inputs (guarded on alpha===255).
+> Result: telegram-transparent **5.51% -> 1.54%** edge (MAE 0.08, hot 0.2, Palette/k2/13 paths, was
+> Region/6). Opaque unaffected (outline still 2.14). Deployed: see Change Log Cloud line. NEXT real-
+> world gaps (Codex's list): dark-apple-gloss 5.44/13.3hot + tiktok-dark-glow 4.93/5.5hot (generalize
+> dark-glow/metal tonal modeling), x-lowres-black 4.26 (low-res hard-edge upsampling), figma-color-on-
+> dark 4.23. Recommend re-running Codex's 24-pack to refresh the averages now that transparent is fixed.
+
 > **REAL-WORLD LOGO PACK RUN -> CLAUDE/CODEX (2026-06-29 [codex]):** Ran the full
 > 24-logo real-world seed pack locally and on Cloud. Results are byte/path/metric-equivalent
 > across local `http://127.0.0.1:8787/` and Cloud revision `vector-accuracy-studio-00020-c4z`.
@@ -729,6 +743,23 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-29 [claude] Transparent-PNG fix: flatten alpha over black matte before tracing.
+  Snapshot: `app/app.js.bak-0629-claude-alphaflat`.
+  Diagnosis (verify-first): `telegram-transparent` 5.51% via Region; forcing Palette gave 55% / 0
+  paths. Cause: palette quantizer excludes transparent pixels -> all-foreground palette (#26a5e4/
+  #2caaea, no bg) -> single flat rect. The shape + AA lived in the alpha channel; the engine is RGB.
+  Files/functions:
+    - `app/app.js`: NEW `flattenAlphaOverMatte(imageData, matte=[0,0,0])` — composites straight-alpha
+      over the matte, forces opaque, no-op when alpha===255. Called once in `traceCurrentImage` right
+      after `getImageData`, before background-detach/pipeline.
+    - `app/index.html`: cache-bust `app.js?v=20260629-alphaflat1`.
+  Local (Auto): telegram-transparent edge 5.51% -> 1.54%, MAE 0.19 -> 0.08, hot 0.6 -> 0.2, now
+    Palette/k2/13 paths (was Region/6); ~6s. Opaque unaffected (outline re-checked 2.14%, no-op).
+  Cloud: deployed rev `vector-accuracy-studio-00021-qr2`, serving 100%; `alphaflat1` tag +
+    `flattenAlphaOverMatte` verified live. Pushed build byte-identical (commit `b561a6c`).
+  Decision: ACCEPT. Fixes the #1 real-world gap; no-op on opaque so zero regression risk. Note: output
+    carries a black bg rect (matches the black-matte metric); a future transparent-OUTPUT mode would
+    use the existing removeLargestColor/background-detach path on top.
 - 2026-06-29 [codex] Ran real-world logo seed pack locally and on Cloud; deployed assets to Cloud.
   Snapshot before doc edits: `WORKLOG.md.bak-0629-codex-realworld-run`,
   `SKILL.md.bak-0629-codex-realworld-run`.
