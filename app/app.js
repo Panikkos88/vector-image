@@ -4788,6 +4788,78 @@ function regionCoverageProjection(src, idx, cr, cs) {
   return clamp(t, 0, 1);
 }
 
+// Coverage projection from an already-sampled rgb (vs regionCoverageProjection which reads a buffer).
+function rgbCoverageProjection(c, cr, cs) {
+  if (!cs) return 1;
+  const dr = cr[0] - cs[0];
+  const dg = cr[1] - cs[1];
+  const db = cr[2] - cs[2];
+  const len2 = dr * dr + dg * dg + db * db;
+  if (len2 < 1) return 1;
+  const t = ((c[0] - cs[0]) * dr + (c[1] - cs[1]) * dg + (c[2] - cs[2]) * db) / len2;
+  return clamp(t, 0, 1);
+}
+
+// Bilinear RGB sample of an ImageData buffer at fractional pixel-index (x, y).
+function bilinearRgb(data, w, h, x, y) {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const tx = x - x0;
+  const ty = y - y0;
+  const cx0 = x0 < 0 ? 0 : x0 > w - 1 ? w - 1 : x0;
+  const cy0 = y0 < 0 ? 0 : y0 > h - 1 ? h - 1 : y0;
+  const cx1 = x0 + 1 < 0 ? 0 : x0 + 1 > w - 1 ? w - 1 : x0 + 1;
+  const cy1 = y0 + 1 < 0 ? 0 : y0 + 1 > h - 1 ? h - 1 : y0 + 1;
+  const rd = (px, py, k) => data[(py * w + px) * 4 + k];
+  const out = [0, 0, 0];
+  for (let k = 0; k < 3; k += 1) {
+    const top = rd(cx0, cy0, k) + (rd(cx1, cy0, k) - rd(cx0, cy0, k)) * tx;
+    const bot = rd(cx0, cy1, k) + (rd(cx1, cy1, k) - rd(cx0, cy1, k)) * tx;
+    out[k] = top + (bot - top) * ty;
+  }
+  return out;
+}
+
+// Build a region's coverage membership field at S x super-sample resolution. Mirrors the 1x field
+// semantics (own->edge coverage / interior 1, adjacent-other->edge coverage, far->0) but samples the
+// source colour bilinearly at sub-pixel positions, so extractIsoSegments lands the iso-0.5 contour
+// at sub-pixel precision. Topology comes from the integer label map (nearest pixel).
+function buildSuperRegionField(regionLabels, regionColor, width, height, r, src, x0, y0, x1, y1, S, cr) {
+  const spanX = x1 - x0 + 1;
+  const spanY = y1 - y0 + 1;
+  const fw = (spanX + 2) * S;
+  const fh = (spanY + 2) * S;
+  const field = new Float32Array(fw * fh);
+  for (let v = 0; v < fh; v += 1) {
+    const sy = y0 - 1 + v / S;
+    const py = sy < 0 ? 0 : sy > height - 1 ? height - 1 : Math.round(sy);
+    for (let u = 0; u < fw; u += 1) {
+      const sx = x0 - 1 + u / S;
+      const px = sx < 0 ? 0 : sx > width - 1 ? width - 1 : Math.round(sx);
+      const lab = regionLabels[py * width + px];
+      let other = -1;
+      if (lab === r) {
+        if (px > 0 && regionLabels[py * width + px - 1] !== r) other = regionLabels[py * width + px - 1];
+        else if (px < width - 1 && regionLabels[py * width + px + 1] !== r) other = regionLabels[py * width + px + 1];
+        else if (py > 0 && regionLabels[(py - 1) * width + px] !== r) other = regionLabels[(py - 1) * width + px];
+        else if (py < height - 1 && regionLabels[(py + 1) * width + px] !== r) other = regionLabels[(py + 1) * width + px];
+        if (other < 0) { field[v * fw + u] = 1; continue; } // deep interior
+      } else {
+        const adjacent =
+          (px > 0 && regionLabels[py * width + px - 1] === r) ||
+          (px < width - 1 && regionLabels[py * width + px + 1] === r) ||
+          (py > 0 && regionLabels[(py - 1) * width + px] === r) ||
+          (py < height - 1 && regionLabels[(py + 1) * width + px] === r);
+        if (!adjacent) { field[v * fw + u] = 0; continue; } // far outside
+        other = lab;
+      }
+      const c = bilinearRgb(src, width, height, sx, sy);
+      field[v * fw + u] = rgbCoverageProjection(c, cr, other >= 0 ? regionColor[other] : null);
+    }
+  }
+  return { field, fw, fh };
+}
+
 // Sub-sample a region's interior pixels: [x, y, r, g, b].
 function sampleRegionPixels(regionLabels, src, width, r, x0, y0, x1, y1) {
   const stride = Math.max(1, Math.round(Math.min(x1 - x0, y1 - y0) / 48));
@@ -4912,6 +4984,7 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
       : Number.isFinite(boundary.coordinateOffset)
         ? boundary.coordinateOffset
         : 0,
+    superSample: Number.isFinite(boundary.superSample) ? Math.max(1, Math.min(4, Math.round(boundary.superSample))) : 1,
     variantName: boundary.name || "base"
   };
   const order = [];
@@ -4934,45 +5007,59 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
     // +1 offset each side so the field ALWAYS has a 0-ring, even when the region touches the
     // image border (e.g. a perimeter frame). Without it the contour can't close at the edge and
     // the even-odd fill floods the interior. (Fix 2026-06-26 [claude]: KOINO logo white-flood bug.)
-    const fw = x1 - x0 + 3;
-    const fh = y1 - y0 + 3;
-    const field = new Float32Array(fw * fh);
     const src = sourceImageData ? sourceImageData.data : null;
     const cr = regionColor[r];
-    for (let y = y0; y <= y1; y += 1) {
-      for (let x = x0; x <= x1; x += 1) {
-        const i = y * width + x;
-        const own = regionLabels[i];
-        const fi = (y - y0 + 1) * fw + (x - x0 + 1);
-        if (!src) {
-          if (own === r) field[fi] = 1;
-          continue;
-        }
-        if (own === r) {
-          // edge of r if any 4-neighbour belongs to another region
-          let s = -1;
-          if (x > 0 && regionLabels[i - 1] !== r) s = regionLabels[i - 1];
-          else if (x < width - 1 && regionLabels[i + 1] !== r) s = regionLabels[i + 1];
-          else if (y > 0 && regionLabels[i - width] !== r) s = regionLabels[i - width];
-          else if (y < height - 1 && regionLabels[i + width] !== r) s = regionLabels[i + width];
-          field[fi] = s < 0 ? 1 : regionCoverageProjection(src, i * 4, cr, regionColor[s]);
-        } else {
-          const adjacent =
-            (x > 0 && regionLabels[i - 1] === r) ||
-            (x < width - 1 && regionLabels[i + 1] === r) ||
-            (y > 0 && regionLabels[i - width] === r) ||
-            (y < height - 1 && regionLabels[i + width] === r);
-          field[fi] = adjacent ? regionCoverageProjection(src, i * 4, cr, regionColor[own]) : 0;
+    const S = (src && fit.superSample > 1) ? fit.superSample : 1;
+    let fw; let fh; let field; let mapPoint;
+    if (S > 1) {
+      // Super-sampled coverage field: bilinear-sample the source at sub-pixel positions so the
+      // iso-0.5 contour lands at true sub-pixel precision (1x marching-squares is ~0.5px coarse on
+      // every edge). Topology (own/neighbour) still comes from the integer label map; colour is
+      // interpolated. Point maps straight back to source coords (the sub-pixel sampling already
+      // positions the contour, so NO +0.5 cell offset is applied here).
+      const sf = buildSuperRegionField(regionLabels, regionColor, width, height, r, src, x0, y0, x1, y1, S, cr);
+      fw = sf.fw; fh = sf.fh; field = sf.field;
+      mapPoint = (p) => [p[0] / S + x0 - 1 + fit.coordinateOffsetX, p[1] / S + y0 - 1 + fit.coordinateOffsetY];
+    } else {
+      fw = x1 - x0 + 3;
+      fh = y1 - y0 + 3;
+      field = new Float32Array(fw * fh);
+      for (let y = y0; y <= y1; y += 1) {
+        for (let x = x0; x <= x1; x += 1) {
+          const i = y * width + x;
+          const own = regionLabels[i];
+          const fi = (y - y0 + 1) * fw + (x - x0 + 1);
+          if (!src) {
+            if (own === r) field[fi] = 1;
+            continue;
+          }
+          if (own === r) {
+            // edge of r if any 4-neighbour belongs to another region
+            let s = -1;
+            if (x > 0 && regionLabels[i - 1] !== r) s = regionLabels[i - 1];
+            else if (x < width - 1 && regionLabels[i + 1] !== r) s = regionLabels[i + 1];
+            else if (y > 0 && regionLabels[i - width] !== r) s = regionLabels[i - width];
+            else if (y < height - 1 && regionLabels[i + width] !== r) s = regionLabels[i + width];
+            field[fi] = s < 0 ? 1 : regionCoverageProjection(src, i * 4, cr, regionColor[s]);
+          } else {
+            const adjacent =
+              (x > 0 && regionLabels[i - 1] === r) ||
+              (x < width - 1 && regionLabels[i + 1] === r) ||
+              (y > 0 && regionLabels[i - width] === r) ||
+              (y < height - 1 && regionLabels[i + width] === r);
+            field[fi] = adjacent ? regionCoverageProjection(src, i * 4, cr, regionColor[own]) : 0;
+          }
         }
       }
+      mapPoint = (p) => [p[0] + x0 - 1 + fit.coordinateOffsetX, p[1] + y0 - 1 + fit.coordinateOffsetY];
     }
     const segs = extractIsoSegments(field, fw, fh, fit.iso);
     if (!segs.length) { droppedTiny += 1; continue; }
     const linked = linkSegmentsIntoLoops(segs, fw, fh);
     const subpaths = [];
     for (const loop of linked.loops) {
-      if (Math.abs(polygonArea(loop.points)) < fit.minArea) continue;
-      const pts = loop.points.map((p) => [p[0] + x0 - 1 + fit.coordinateOffsetX, p[1] + y0 - 1 + fit.coordinateOffsetY]);
+      const pts = loop.points.map(mapPoint);
+      if (Math.abs(polygonArea(pts)) < fit.minArea) continue;
       const d = loopToSmoothSubpath(pts, fit);
       if (d) subpaths.push(d);
     }
@@ -5839,6 +5926,12 @@ function paletteBoundaryCandidates(options = {}) {
   const fineTolerance = Math.min(0.25, baseTolerance);
   const rawTolerance = 0.05;
   return [
+    // 2x super-sampled coverage trace: bilinear-samples the source at sub-pixel positions so the
+    // iso-0.5 contour lands sub-pixel-accurate, past the ~3.94% floor the 1x grid could reach. The
+    // raw 2x loop is node-heavy; the boundary simplifier refits it down. coordinateOffset 0.5 is
+    // still required. Metric-guarded like every candidate: only wins where it beats the 1x set
+    // (outline 4.07%->~3.6%), ignored elsewhere. 4x was tested and is worse (over-samples 1x topology).
+    { name: "supersample2", label: "Super-sample 2x", variant: { name: "supersample2", superSample: 2, coordinateOffset: 0.5, simplifyTolerance: 0.12, cornerAngle: 0.65 } },
     { name: "base", label: "Current placement", variant: { name: "base" } },
     { name: "fine-simplify", label: "Finer simplification", variant: { name: "fine-simplify", simplifyTolerance: fineTolerance } },
     { name: "raw-loop", label: "Near-raw loop", variant: { name: "raw-loop", simplifyTolerance: rawTolerance } },
