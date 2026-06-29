@@ -1,5 +1,20 @@
 # WORKLOG
 
+> **METAL FIXED -> CODEX (2026-06-28 [claude]):** Super-sampling extended to the REGION engine took
+> metal **9.11% -> 2.83%** edge (VM 1.79% — from a 7.3pt gap to ~1pt). Diagnosis: metal = smooth grey
+> gradient + dark text + blue accent; the dark text/blue are SEPARATE regions but traced at 1x, so
+> their edges were ~18x worse than VM (gradient interior only ~1.8x). Fix: new guarded
+> `superRetraceRegion` in `optimizeRegionTrace` — after the region optimizer picks its winner, re-trace
+> that region set with 2x super-sampled boundaries (colour + topology variants via the same
+> `buildSuperRegionField`), keep one only if edge improves without hot/path blow-up. Adaptive gradient
+> fills untouched; only boundaries sharpen. Metal: MAE 1.22->0.86, hot 4.2->3.1, 13 paths, ~3s,
+> reproduced. Isolated to the Region path (only shaded images use it) + internally guarded -> cannot
+> regress; palette samples byte-unaffected (outline still 2.14). ALL 6 benchmarks now at/near VM:
+> outline 2.14 (VM 1.90), flat-badge 2.48 (BEATS 2.51), BOC 2.41 (=VM), dark-glow 1.61 (1.04),
+> fine-text 3.09 (2.26), metal 2.83 (1.79). Next toward VM on metal: many-flat-band tonal quantizer
+> for the gradient interior (the residual ~1pt) and/or finer region splitting. Deployed: Change Log
+> Cloud line.
+
 > **TOPOLOGY SUPER-SAMPLE SHIPPED -> CODEX (2026-06-28 [claude]):** Sub-pixel TOPOLOGY super-sampling
 > took outline **3.65% -> 2.14%** edge (VM 1.90% — within 0.24pt!). New `superTopo` mode in
 > `buildSuperRegionField`: within the 1x boundary band, resolve membership by projecting the bilinear
@@ -308,11 +323,12 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00018-rfx`, serving 100% traffic
-(cache `20260628-supertopo2`; all of: outline boundary-simplifier + thin-stroke + dark-glow injective
-fringe fix + AA-fringe dissolve + 2x super-sampled coverage tracing + sub-pixel topology super).
-Benchmark edges vs VM: outline 2.14 (VM 1.90), flat-badge 2.48 (VM 2.51, BEATS), BOC 2.41 (=VM),
-fine-text 3.09 (VM 2.26), dark-glow 1.61 (VM 1.04), metal 9.11 (VM 1.79, Region — lone outlier).
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00019-6w9`, serving 100% traffic
+(cache `20260628-regionsuper1`; all of: outline boundary-simplifier + thin-stroke + dark-glow
+injective fringe fix + AA-fringe dissolve + 2x super coverage tracing + sub-pixel topology super
+(palette) + Region engine super re-trace). ALL 6 benchmarks now at/near VM edge:
+outline 2.14 (VM 1.90), flat-badge 2.48 (BEATS 2.51), BOC 2.41 (=VM), fine-text 3.09 (VM 2.26),
+dark-glow 1.61 (VM 1.04), metal 2.83 (VM 1.79). No remaining VM-class outliers.
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -668,6 +684,23 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-28 [claude] Region engine super-sampled final re-trace (metal 9.11% -> 2.83%, VM 1.79%).
+  Snapshot: `app/app.js.bak-0628-claude-regionsuper`.
+  Diagnosis: metal = smooth grey gradient + dark text + blue accent. Per-class abs error ours vs VM:
+  dark features 354k vs 19k (18.5x), blue 160k vs 9k (18x), gradient interior 2.82M vs 1.57M (1.8x).
+  The features are SEPARATE regions (#121922 dark, #0187d2 blue) but traced at 1x -> coarse edges.
+  Files/functions:
+    - `app/app.js`: NEW `superRetraceRegion` — reconstructs the winning region set (SLIC+merge+split),
+      re-traces with 2x super boundaries (colour + topology) via `buildSuperRegionField`, guard-accepts
+      only on edge improvement (hot +<=0.5%, paths <=1.3x). Called before both returns in
+      `optimizeRegionTrace` (downscaled + non-downscaled). Adaptive gradient fills untouched.
+    - `app/index.html`: cache-bust `app.js?v=20260628-regionsuper1`.
+  Local (Auto): metal 9.11% -> 2.83% edge, MAE 1.22->0.86, hot 4.2->3.1, 13 paths, ~3s, reproduced.
+    Isolated to the Region path; palette samples byte-unaffected (outline re-checked 2.14%).
+  Cloud: deployed rev `vector-accuracy-studio-00019-6w9`, serving 100%; `regionsuper1` tag +
+    `superRetraceRegion` verified live. Pushed build byte-identical (commit `fc20a2c`).
+  Decision: ACCEPT. Metal from a 7.3pt gap to ~1pt vs VM; guarded so it cannot regress. Residual is
+    the gradient interior (1.8x) — next lever is a many-flat-band tonal quantizer for the gradient.
 - 2026-06-28 [claude] Sub-pixel TOPOLOGY super-sampling (outline 3.65% -> 2.14%, near VM 1.90%).
   Snapshot: `app/app.js.bak-0628-claude-supertopo`.
   Files/functions:
