@@ -1,5 +1,22 @@
 # WORKLOG
 
+> **GENERALIZED TONAL BANDING -> REGION ENGINE (dark-glow cluster) -> CODEX (2026-06-29 [claude]):**
+> First build pass against the VM targets. `optimizeGlowTonalBanding` now ALSO runs on the Region
+> engine output (after super-retrace), not just the palette path; `tonalBandCandidatePassesGuard`
+> gained a strong-win bypass (accept many band paths/nodes when edge clearly drops + no hot increase
+> — was rejecting clear wins on node growth); `glowTonalBandOptions` maxBands 18->36 + smaller
+> minBandPixels. Local (Auto, guarded): dark-apple-gloss 5.44->4.40 (hot 13.3->7.4),
+> tiktok-dark-glow 4.93->3.80 (hot 5.5->2.2), dark-glow synth 1.61->1.57. No regression: react-atom
+> 4.09 (bands didn't win on its Region base), metal 2.83, BOC 2.41, palette flats untouched (banding
+> is no-op unless dark bg + glow + effects=preserve). PARTIAL vs VM (apple 2.01 / tiktok 1.92): the
+> Region base plateaus the EDGE (~4.4) because gradient-fill feature edges remain; bands fix the
+> glow (MAE/hot) not the edges. NEXT (logged, the real closer): route this dark-glow class to the
+> PALETTE+super+tonal base — forced-palette already hits apple 3.12% / hot 2.0% (vs Region+bands
+> 4.40 / 7.4). Either broaden the dark-glow router exception (selectedResidual cap 19->~30, relax
+> fullFits) — risk: mis-route non-glow dark content — or a guarded palette-vs-region bake-off for
+> dark-glow-signal images (safer). Also: react-atom needs its glow to pass the guard on whatever base.
+> Deployed: see Change Log Cloud line.
+
 > **VM REAL-WORLD REFS CREATED + TARGETS MEASURED -> CODEX (2026-06-29 [claude]):** The blocker from
 > the dark-gloss banner below is RESOLVED. Created VM references for all 6 serious real-world cases
 > via the user's purchased VM account (Chrome automation: paste -> auto-vectorize -> fill-only SVG;
@@ -773,6 +790,25 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-29 [claude] Generalized tonal banding into the Region engine (dark-glow cluster).
+  Snapshot: `app/app.js.bak-0629-claude-tonalbands`.
+  Files/functions:
+    - `app/app.js`: `optimizeGlowTonalBanding` now also called on the Region engine output (both
+      return paths of `optimizeRegionTrace`, after super-retrace). `tonalBandCandidatePassesGuard` +
+      `tonalBandGuardFailures`: strong-win bypass (edgeDelta < -0.008 && hot not worse) lets bands
+      exceed the path/node caps (base.paths+130, base.nodes*8) — was rejecting clear wins on node
+      growth. `glowTonalBandOptions`: maxBands 18->36 (medium), minBandPixels divisor lowered.
+    - `app/index.html`: cache-bust `app.js?v=20260629-tonalbands1`.
+  Local (Auto, metric-guarded): dark-apple-gloss 5.44->4.40 (MAE 3.57->2.03, hot 13.3->7.4),
+    tiktok-dark-glow 4.93->3.80 (hot 5.5->2.2), dark-glow synth 1.61->1.57. No regression: react-atom
+    4.09 (bands didn't win), metal 2.83 (light bg skipped), BOC 2.41, outline/palette flats untouched.
+  VM targets: apple 2.01 / tiktok 1.92 — still gapped; Region base plateaus the EDGE. Forced-palette
+    on apple = 3.12% / hot 2.0 (better base) -> routing this class to palette+super+tonal is the next
+    closer (see top banner).
+  Cloud: deployed rev `vector-accuracy-studio-00022-4ng`, `tonalbands1` tag + `regionTonalBanding`
+    verified live. Pushed build byte-identical (commit `f384a36`).
+  Decision: ACCEPT. Safe partial win on the dark-glow cluster (no routing change, metric-guarded,
+    no regression). Bigger gain pending the palette-routing/bake-off follow-up.
 - 2026-06-29 [claude] Transparent-PNG fix: flatten alpha over black matte before tracing.
   Snapshot: `app/app.js.bak-0629-claude-alphaflat`.
   Diagnosis (verify-first): `telegram-transparent` 5.51% via Region; forcing Palette gave 55% / 0
