@@ -1,5 +1,17 @@
 # WORKLOG
 
+> **HANDOFF -> CLAUDE/CODEX (2026-06-28 [codex]):** GitHub/public research pass complete:
+> `research/github-vectorization-research-2026-06-28.md`. No app code changed. Current shipped
+> state remains Claude's `fringedissolve1` / Cloud rev `00016-4cr` / outline 4.07% edge vs VM
+> 1.90%. Research conclusion agrees with Claude's diagnosis: the next real gain is NOT another
+> deployment pass or a generic tracer swap. Most relevant sources are `JinfanYang/SubpixelDeblurring`
+> (recover anti-aliased clip-art topology before vectorization), `BachiLi/diffvg` plus LIVE/SGLIVE
+> (measured vector-parameter optimization after layer proposals), VTracer/Potrace (corner/turn
+> policies and comparison baselines), and ImageTracerJS as a ceiling marker. Recommended order:
+> run the unbounded Palette candidate probe only as a quick compute-vs-model test, then build a
+> small ROI coverage-aware corner reconstruction pass for the two outline shield tips. Do not
+> chase yellow path count, global Schneider fitting, or Cloud/server-side porting as quality fixes.
+
 > **NOTES -> CODEX (2026-06-28 [claude]):** Outline remaining-gap analysis + the "run it on the
 > Google Cloud instance / server-side?" question are written up in full in
 > `research/outline-gap-and-server-side-2026-06-28-claude.md`. READ IT before touching outline or
@@ -333,6 +345,14 @@ edge improved 9.78% -> 5.36%, hot 1.8% -> 0.7%, paths stayed 31, nodes 1372 -> 4
 thin-stroke recovery, final outline is 5.32% edge / 0.26% MAE / 0.7% hot / 18 paths / 5248 nodes.
 BOC, fine-text, and metal held; dark-glow remains at the already-drifted 3.32% / 68-path result.
 
+2026-06-28 [codex]: GitHub/public research pass added
+`research/github-vectorization-research-2026-06-28.md`. It confirms the useful external knowledge
+for the current outline gap is: subpixel deblurring/topology recovery for anti-aliased clip-art,
+small-region vector-parameter optimization inspired by diffvg/LIVE/SGLIVE, and Potrace-style
+turn/corner policies. It does not change shipped state or benchmark scores. Best next build remains
+coverage-aware corner reconstruction around the two shield-tip ROIs, with an unbounded Palette
+candidate probe first only to prove whether more search in the current model can help.
+
 ## Next Steps
 (Ordered by impact. Items 1-4 are an engine change, not a tune-up.)
 1. ✅ DONE (2026-06-25 [claude]) **Stop binarizing coverage / capture the coverage map.**
@@ -384,6 +404,15 @@ not VM-level yet. Outline now sits at 5.32% edge / 18 paths vs VM 1.90% / 30 pat
 deploy, investigate why current local dark-glow still measures 3.32% / 68 paths instead of the
 earlier accepted 1.72% / 50. After that, the next outline gain likely needs coverage-aware
 shared-edge reconstruction or better thin-stroke source modeling, not more routing work.
+
+2026-06-28 [codex] research update: current shipped state already has dark-glow restored and
+outline at 4.07% edge after Claude's `fringedissolve1`. For the next engine turn, use
+`research/outline-gap-and-server-side-2026-06-28-claude.md` plus
+`research/github-vectorization-research-2026-06-28.md` together. Recommended sequence:
+1. quick unbounded Palette candidate probe on outline to test whether current candidate search has
+   hidden headroom;
+2. if not, build ROI coverage-aware corner reconstruction at the two shield tips;
+3. only consider backend/diffvg-style optimization after a small local proof shows measurable gain.
 
 **Recommended first build:** prototype items 1+3 as a NEW experimental engine alongside
 ImageTracerJS, so it can be benchmarked against the current output without breaking the baseline.
@@ -568,6 +597,22 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-28 [codex] GitHub/public vectorization research pass; no app code changed.
+  Snapshot before doc edits: `WORKLOG.md.bak-0628-codex-github-research`,
+  `SKILL.md.bak-0628-codex-github-research`.
+  Files/functions touched:
+    - `research/github-vectorization-research-2026-06-28.md`: new shared research note covering
+      SubpixelDeblurring, diffvg, LIVE/SGLIVE, VTracer, Potrace/node-potrace/AutoTrace,
+      ImageTracerJS, fit-curve/Bezier.js/simplify-js, Primitive, and StarVector.
+    - `WORKLOG.md`: added top handoff, Current State research summary, Next Steps research
+      sequence, and this Change Log entry.
+    - `SKILL.md`: added the research note to algorithm memory and current research notes.
+  Local: not run; research/docs-only change.
+  VM: not run; research/docs-only change.
+  Cloud: not deployed/tested; research/docs-only change.
+  Decision: ACCEPT as shared knowledge. It supports Claude's diagnosis: next gains should come
+    from unbounded candidate probe + ROI coverage-aware corner reconstruction, not server porting,
+    yellow path-count chasing, or generic curve-fitting retries.
 - 2026-06-28 [claude] Outline coverage-reconstruction: dissolve AA-fringe colours into anchors
   (edge 5.32% -> 4.07%). Snapshot: `app/app.js.bak-0628-claude-fringedissolve`.
   Diagnosis (all data-driven, browser-measured against the VM SVG in our own harness):
