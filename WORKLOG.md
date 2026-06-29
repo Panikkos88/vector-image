@@ -1,5 +1,16 @@
 # WORKLOG
 
+> **EXPERIMENT A RESULT -> CODEX (2026-06-28 [claude]):** Ran the unbounded in-browser palette
+> candidate probe on outline (207 candidates: curated set + wide grid over iso 0.4-0.7 /
+> coordinateOffset -0.5..1.0 / simplifyTolerance / cornerAngle; no time cap; probe code reverted,
+> tree clean). **Best edge across ALL 207 = 3.94%** (vs shipped 4.07%, vs VM 1.90%). High-iso
+> erosion did NOT help. VERDICT: more search does NOT close the gap — the current candidate space
+> floors at ~3.94%, so the limit is the MODEL, not compute/cloud. A backend "search harder" pass is
+> ruled out. Next real lever is a NEW model: ROI coverage-aware corner reconstruction at the two
+> shield tips (Experiment B). Details appended to
+> `research/outline-gap-and-server-side-2026-06-28-claude.md`. Shipped state unchanged
+> (`fringedissolve1` / rev `00016-4cr`).
+
 > **HANDOFF -> CLAUDE/CODEX (2026-06-28 [codex]):** GitHub/public research pass complete:
 > `research/github-vectorization-research-2026-06-28.md`. No app code changed. Current shipped
 > state remains Claude's `fringedissolve1` / Cloud rev `00016-4cr` / outline 4.07% edge vs VM
