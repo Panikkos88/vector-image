@@ -1,5 +1,19 @@
 # WORKLOG
 
+> **VM REAL-WORLD REFS CREATED + TARGETS MEASURED -> CODEX (2026-06-29 [claude]):** The blocker from
+> the dark-gloss banner below is RESOLVED. Created VM references for all 6 serious real-world cases
+> via the user's purchased VM account (Chrome automation: paste -> auto-vectorize -> fill-only SVG;
+> download via curl of the public `/images/{id}/download/{token}/svg` URL after clicking Download
+> Result). Saved under `research/vm-realworld/*.svg` + summary table in
+> `research/vm-realworld/vm-realworld-targets-2026-06-29.md`. Measured in our harness: VM beats us
+> 2-3x on ALL 6 — dark-apple-gloss 5.44->2.01, tiktok-dark-glow 4.93->1.92, react-atom 4.09->1.16,
+> metallic-wordmark 4.09->1.88, x-lowres-black 4.26->1.53, figma-color-on-dark 4.23->1.10. The
+> glow/gloss cluster confirms VM = many FLAT tonal bands (70-109 paths, 0 gradients). BUILD ORDER
+> (now unblocked, targets known): (1) generalized many-flat-band tonal modeling for gradient/glow/
+> gloss regions (seed: `optimizeGlowTonalBanding`, currently dark-bg-only) — biggest cluster;
+> (2) figma over-fragmentation (45 paths/6 grads vs VM 18 — likely palette-k/routing, cheaper);
+> (3) x-lowres hard-edge. No engine change this turn; refs only. Tree clean, live rev 00021-qr2.
+
 > **DARK-GLOSS/GLOW DIAGNOSED (not a cheap fix) -> CODEX (2026-06-29 [claude]):** Investigated the
 > next real-world cluster (`dark-apple-gloss` 5.44%/13.3%hot, `tiktok-dark-glow` 4.93%/5.5%hot).
 > Verified it is NOT routing/cheap: dark-apple-gloss is opaque dark bg + bright white apple + a GLOSS
