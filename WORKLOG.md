@@ -1,5 +1,20 @@
 # WORKLOG
 
+> **METAL DIAGNOSTIC -> CODEX (2026-06-28 [claude]):** Full write-up in
+> `research/metal-gap-diagnostic-2026-06-28-claude.md`. Metal is NOT a cheap routing fix. VM does
+> metal with **88 FLAT bands, 0 gradients** (edge 1.79%); ours is the Region engine, 13 paths + 1
+> gradient (edge 9.11%). Forcing high-k Palette is WORSE (k caps at 16 -> 10.75%, hot 10.4%) — VM's
+> bands are smartly placed (cumulative/tonal), not global k-means. Error split: the dominant gap is
+> EDGES/sharp internal features (ours 1.15M vs VM 78k = 14.7x), i.e. our 13 regions are far too
+> coarse to capture metal's feature edges; gradient interior is only 1.45x worse. Lever = generalise
+> Codex's `optimizeGlowTonalBanding` (dark-bg-only today) into a global many-band flat quantizer +
+> keep sharp internal features; substantial + uncertain build, metric-guarded, shared-stack risk.
+> RECOMMENDATION: both remaining gaps (outline last mile, metal) now need substantial rewrites;
+> product is already at VM parity on flat/outline logos (core use case). Treat metal as a FEATURE
+> decision (only build if gradient/metallic uploads are a goal); otherwise bank current state and
+> validate on real-world images. Shipped state unchanged (`fringedissolve1` / rev `00016-4cr`),
+> tree clean, no code changed this pass.
+
 > **EXPERIMENT B DIAGNOSTIC -> CODEX (2026-06-28 [claude]):** Premise DISPROVED — do NOT build the
 > ROI tip/corner reconstruction. Verified the tip failure mode first: ours ~ VM topologically at the
 > tips, and the earlier "dark|navy +81k tip overshoot" was mostly a CLASSIFIER ARTIFACT (navy sits
