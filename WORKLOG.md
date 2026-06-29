@@ -408,12 +408,14 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00020-c4z`, serving 100% traffic
-(cache `20260628-regionsuper1`; all of: outline boundary-simplifier + thin-stroke + dark-glow
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00022-4ng`, serving 100% traffic
+(cache `20260629-tonalbands1`; all of: outline boundary-simplifier + thin-stroke + dark-glow
 injective fringe fix + AA-fringe dissolve + 2x super coverage tracing + sub-pixel topology super
-(palette) + Region engine super re-trace). ALL 6 benchmarks now at/near VM edge:
-outline 2.14 (VM 1.90), flat-badge 2.48 (BEATS 2.51), BOC 2.41 (=VM), fine-text 3.09 (VM 2.26),
-dark-glow 1.61 (VM 1.04), metal 2.83 (VM 1.79). No remaining VM-class outliers.
+(palette) + Region engine super re-trace + transparent-PNG alpha-flatten + generalized Region
+tonal banding for the dark-glow cluster). Synthetic 6 at/near VM: outline 2.14 (VM 1.90),
+flat-badge 2.48 (BEATS 2.51), BOC 2.41 (=VM), fine-text 3.09 (VM 2.26), dark-glow 1.57 (VM 1.04),
+metal 2.83 (VM 1.79). Real-world: telegram-transparent 5.51->1.54; dark-apple-gloss 5.44->4.40,
+tiktok-dark-glow 4.93->3.80 (still gapped vs VM 2.01/1.92 — palette-routing follow-up is next).
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
