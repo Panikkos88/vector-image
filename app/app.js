@@ -2117,9 +2117,9 @@ function glowTonalBandOptions(options = {}, imageData = null) {
   const area = imageData ? imageData.width * imageData.height : 0;
   return {
     enabled: options.effects === "preserve" && options.antiAlias !== "off" && !options.removeLargestColor,
-    maxBands: detail === "high" ? 24 : detail === "low" ? 12 : 18,
+    maxBands: detail === "high" ? 48 : detail === "low" ? 20 : 36,
     minCandidateRatio: detail === "high" ? 0.006 : 0.008,
-    minBandPixels: Math.max(80, Math.round(area * (detail === "high" ? 0.0015 : detail === "low" ? 0.0035 : 0.0022))),
+    minBandPixels: Math.max(48, Math.round(area * (detail === "high" ? 0.0008 : detail === "low" ? 0.0022 : 0.0012))),
     minComponentArea: Math.max(18, Math.round(area * (detail === "high" ? 0.00006 : detail === "low" ? 0.00016 : 0.0001))),
     minLoopArea: Math.max(5, Math.round(area * 0.000012)),
     simplifyTolerance: detail === "high" ? 0.55 : detail === "low" ? 1.1 : 0.75,
@@ -5554,8 +5554,10 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
   if (!downscaled) {
     best = await superRetraceRegion(best, segSource, pipelineOptions, referenceImageData, guardOptions);
     stats.superRetrace = best.candidate.superVariant || "none";
-    best.traced.regionOptimization = stats;
-    return best.traced;
+    const bandedB = await optimizeGlowTonalBanding(best.traced, referenceImageData, pipelineOptions, best.difference, best.paths, estimateSvgPointCount(best.traced.svg));
+    stats.regionTonalBanding = bandedB.tonalBanding;
+    bandedB.regionOptimization = stats;
+    return bandedB;
   }
 
   // Coarse-to-fine: 400px ranking doesn't perfectly predict full-res quality, so promote the
@@ -5601,8 +5603,13 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
   stats.superRetrace = fullBest.candidate.superVariant || "none";
   stats.superRetraceEdgeRmse = fullBest.difference?.edgeWeightedRmse;
   stats.superRetracePaths = fullBest.paths;
-  fullBest.traced.regionOptimization = stats;
-  return fullBest.traced;
+  // Generalized tonal banding for dark gradient/glow/gloss regions (Region engine path, mirroring
+  // the palette path). No-op unless effects=preserve + a dark background with smooth glow pixels;
+  // metric-guarded (strong edge+hot win required). Targets dark-apple-gloss/tiktok/react-atom class.
+  const bandedFull = await optimizeGlowTonalBanding(fullBest.traced, referenceImageData, pipelineOptions, fullBest.difference, fullBest.paths, estimateSvgPointCount(fullBest.traced.svg));
+  stats.regionTonalBanding = bandedFull.tonalBanding;
+  bandedFull.regionOptimization = stats;
+  return bandedFull;
 }
 
 // === PALETTE ENGINE (flat-logo path, mirrors Vector Magic) ===
@@ -6556,8 +6563,12 @@ function tonalBandCandidatePassesGuard(candidate, base, optimizer) {
     Math.ceil(base.paths * optimizer.maxPathGrowth),
     base.paths + optimizer.maxExtraPaths
   );
-  const pathOk = candidate.paths <= maxPaths;
-  const nodeOk = candidate.nodes <= Math.ceil(base.nodes * optimizer.maxNodeGrowth);
+  // Strong win: tonal banding legitimately needs many flat band paths/nodes (VM uses 70-110 for
+  // gloss/glow), so when the bands clearly cut edge error AND don't add hot pixels, accept them past
+  // the normal path/node caps. Otherwise keep the strict guard (avoids node bloat for marginal gains).
+  const strongWin = edgeDelta < -0.008 && hotDelta <= 0.0005 && contaminationDelta <= optimizer.contaminationSlack;
+  const pathOk = candidate.paths <= (strongWin ? base.paths + 130 : maxPaths);
+  const nodeOk = candidate.nodes <= Math.ceil(base.nodes * (strongWin ? 8 : optimizer.maxNodeGrowth));
   const edgeWin = edgeDelta < -optimizer.minEdgeImprovement;
   const strongMeanWin = meanImprovement >= optimizer.minStrongMeanImprovement && edgeDelta <= optimizer.edgeSlack;
   const meanWin = meanImprovement >= optimizer.minMeanImprovement && edgeDelta <= optimizer.edgeSlack * 0.55;
@@ -6580,8 +6591,9 @@ function tonalBandGuardFailures(candidate, base, optimizer) {
     Math.ceil(base.paths * optimizer.maxPathGrowth),
     base.paths + optimizer.maxExtraPaths
   );
-  if (candidate.paths > maxPaths) failures.push("path growth");
-  if (candidate.nodes > Math.ceil(base.nodes * optimizer.maxNodeGrowth)) failures.push("node growth");
+  const strongWin = edgeDelta < -0.008 && hotDelta <= 0.0005 && contaminationDelta <= optimizer.contaminationSlack;
+  if (candidate.paths > (strongWin ? base.paths + 130 : maxPaths)) failures.push("path growth");
+  if (candidate.nodes > Math.ceil(base.nodes * (strongWin ? 8 : optimizer.maxNodeGrowth))) failures.push("node growth");
   if (hotDelta > optimizer.hotPixelSlack) failures.push("hot pixels");
   if (contaminationDelta > optimizer.contaminationSlack) failures.push("background contamination");
   if (!(edgeDelta < -optimizer.minEdgeImprovement ||
