@@ -3838,6 +3838,29 @@ function matteRgb(data, index, matte = [0, 0, 0]) {
   ];
 }
 
+// Composite straight-alpha pixels over a matte (default black, matching measureSvgDifference's
+// matte) and force them opaque. No-op for already-opaque images. For transparent PNGs this turns
+// the alpha-defined shape and its alpha anti-aliasing into colour-on-matte with REAL rgb edge
+// transitions, so the palette quantizer includes the background colour and the router/super-sampler
+// work natively. Without it, transparent logos collapsed: the quantizer excludes transparent pixels,
+// builds an all-foreground palette, and renders one flat rect (telegram-transparent: Region 5.51%,
+// or 55% / 0 paths if forced to Palette). Returns the count of pixels composited.
+function flattenAlphaOverMatte(imageData, matte = [0, 0, 0]) {
+  const d = imageData.data;
+  let touched = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = d[i + 3];
+    if (a === 255) continue;
+    const f = a / 255;
+    d[i] = Math.round(d[i] * f + matte[0] * (1 - f));
+    d[i + 1] = Math.round(d[i + 1] * f + matte[1] * (1 - f));
+    d[i + 2] = Math.round(d[i + 2] * f + matte[2] * (1 - f));
+    d[i + 3] = 255;
+    touched += 1;
+  }
+  return touched;
+}
+
 function buildLumaBuffer(imageData) {
   const luma = new Float32Array(imageData.width * imageData.height);
   const data = imageData.data;
@@ -7453,6 +7476,10 @@ async function traceCurrentImage() {
   originalMeta.textContent = `${loadedImage.naturalWidth} x ${loadedImage.naturalHeight} to ${original.width} x ${original.height}`;
   const ctx = originalCanvas.getContext("2d", { willReadFrequently: true });
   const imageData = ctx.getImageData(0, 0, original.width, original.height);
+  // Flatten transparency over the metric's black matte so transparent PNGs become colour-on-black
+  // with real rgb edges (no-op for opaque inputs). Fixes the all-foreground collapse on transparent
+  // logos. Done before background-detach/pipeline so every downstream stage sees a consistent image.
+  flattenAlphaOverMatte(imageData);
   const removeLargestColor = removeBackgroundInput ? removeBackgroundInput.checked : false;
   const traceOptions = {
     removeLargestColor,
