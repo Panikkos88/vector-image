@@ -4824,12 +4824,30 @@ function bilinearRgb(data, w, h, x, y) {
 // semantics (own->edge coverage / interior 1, adjacent-other->edge coverage, far->0) but samples the
 // source colour bilinearly at sub-pixel positions, so extractIsoSegments lands the iso-0.5 contour
 // at sub-pixel precision. Topology comes from the integer label map (nearest pixel).
-function buildSuperRegionField(regionLabels, regionColor, width, height, r, src, x0, y0, x1, y1, S, cr) {
+function buildSuperRegionField(regionLabels, regionColor, width, height, r, src, x0, y0, x1, y1, S, cr, topo) {
   const spanX = x1 - x0 + 1;
   const spanY = y1 - y0 + 1;
   const fw = (spanX + 2) * S;
   const fh = (spanY + 2) * S;
   const field = new Float32Array(fw * fh);
+  // Topology mode: resolve membership by COLOUR at sub-pixel resolution. The 1x label map only
+  // gates which cells are near r's boundary (coarse, fine); inside that band the edge position is
+  // decided by projecting the bilinear colour against the NEAREST competing region colour, rather
+  // than whichever 1x neighbour happens to be first. This unblocks corners/junctions where the
+  // pixel-grid topology was the cap. Precompute r's adjacent region colours once.
+  let neighborColors = null;
+  if (topo) {
+    const seen = new Set();
+    neighborColors = [];
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        if (regionLabels[y * width + x] !== r) continue;
+        const i = y * width + x;
+        const ns = [x > 0 ? regionLabels[i - 1] : -1, x < width - 1 ? regionLabels[i + 1] : -1, y > 0 ? regionLabels[i - width] : -1, y < height - 1 ? regionLabels[i + width] : -1];
+        for (const nl of ns) if (nl !== r && nl >= 0 && !seen.has(nl)) { seen.add(nl); neighborColors.push(regionColor[nl]); }
+      }
+    }
+  }
   for (let v = 0; v < fh; v += 1) {
     const sy = y0 - 1 + v / S;
     const py = sy < 0 ? 0 : sy > height - 1 ? height - 1 : Math.round(sy);
@@ -4854,7 +4872,19 @@ function buildSuperRegionField(regionLabels, regionColor, width, height, r, src,
         other = lab;
       }
       const c = bilinearRgb(src, width, height, sx, sy);
-      field[v * fw + u] = rgbCoverageProjection(c, cr, other >= 0 ? regionColor[other] : null);
+      if (topo && neighborColors && neighborColors.length) {
+        // project against the nearest competing region colour to the sampled colour (sub-pixel topology)
+        let cn = neighborColors[0];
+        let best = Infinity;
+        for (let n = 0; n < neighborColors.length; n += 1) {
+          const col = neighborColors[n];
+          const d = (c[0] - col[0]) * (c[0] - col[0]) + (c[1] - col[1]) * (c[1] - col[1]) + (c[2] - col[2]) * (c[2] - col[2]);
+          if (d < best) { best = d; cn = col; }
+        }
+        field[v * fw + u] = rgbCoverageProjection(c, cr, cn);
+      } else {
+        field[v * fw + u] = rgbCoverageProjection(c, cr, other >= 0 ? regionColor[other] : null);
+      }
     }
   }
   return { field, fw, fh };
@@ -4985,6 +5015,7 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
         ? boundary.coordinateOffset
         : 0,
     superSample: Number.isFinite(boundary.superSample) ? Math.max(1, Math.min(4, Math.round(boundary.superSample))) : 1,
+    superTopo: Boolean(boundary.superTopo),
     variantName: boundary.name || "base"
   };
   const order = [];
@@ -5017,7 +5048,7 @@ function traceRegionsToSvg(regions, options = {}, sourceImageData = null) {
       // every edge). Topology (own/neighbour) still comes from the integer label map; colour is
       // interpolated. Point maps straight back to source coords (the sub-pixel sampling already
       // positions the contour, so NO +0.5 cell offset is applied here).
-      const sf = buildSuperRegionField(regionLabels, regionColor, width, height, r, src, x0, y0, x1, y1, S, cr);
+      const sf = buildSuperRegionField(regionLabels, regionColor, width, height, r, src, x0, y0, x1, y1, S, cr, fit.superTopo);
       fw = sf.fw; fh = sf.fh; field = sf.field;
       mapPoint = (p) => [p[0] / S + x0 - 1 + fit.coordinateOffsetX, p[1] / S + y0 - 1 + fit.coordinateOffsetY];
     } else {
@@ -5926,12 +5957,13 @@ function paletteBoundaryCandidates(options = {}) {
   const fineTolerance = Math.min(0.25, baseTolerance);
   const rawTolerance = 0.05;
   return [
-    // 2x super-sampled coverage trace: bilinear-samples the source at sub-pixel positions so the
-    // iso-0.5 contour lands sub-pixel-accurate, past the ~3.94% floor the 1x grid could reach. The
-    // raw 2x loop is node-heavy; the boundary simplifier refits it down. coordinateOffset 0.5 is
-    // still required. Metric-guarded like every candidate: only wins where it beats the 1x set
-    // (outline 4.07%->~3.6%), ignored elsewhere. 4x was tested and is worse (over-samples 1x topology).
+    // 2x super-sampled coverage trace. Two flavours, both metric-guarded (only the better wins per
+    // image, else the 1x set wins): colour-only super-samples the source colour (best on thin text);
+    // TOPOLOGY also resolves membership by the nearest competing region colour at sub-pixel res
+    // (best on solid shapes/corners -> outline 4.07% -> ~2.1%, near VM 1.90%). Thin strokes prefer
+    // colour-only; solid logos prefer topology -> keep both. coordinateOffset 0.5 still required.
     { name: "supersample2", label: "Super-sample 2x", variant: { name: "supersample2", superSample: 2, coordinateOffset: 0.5, simplifyTolerance: 0.12, cornerAngle: 0.65 } },
+    { name: "supersample2-topo", label: "Super-sample 2x (topology)", variant: { name: "supersample2-topo", superSample: 2, superTopo: true, coordinateOffset: 0.5, simplifyTolerance: 0.12, cornerAngle: 0.65 } },
     { name: "base", label: "Current placement", variant: { name: "base" } },
     { name: "fine-simplify", label: "Finer simplification", variant: { name: "fine-simplify", simplifyTolerance: fineTolerance } },
     { name: "raw-loop", label: "Near-raw loop", variant: { name: "raw-loop", simplifyTolerance: rawTolerance } },
