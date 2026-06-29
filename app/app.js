@@ -5323,6 +5323,44 @@ function refinementBeatsCurrent(refResult, best, base) {
   return edgeDelta < -0.001 && hotDelta <= 0.005 && pathRatio <= 2.2;
 }
 
+// Final sub-pixel pass for the Region engine: re-trace the winning region set with 2x
+// super-sampled boundaries (colour and topology variants) and keep one only if edge error clearly
+// improves without hot-pixel/path blow-up. The Region engine traces at 1x by default, so feature
+// edges (e.g. metal's dark text + blue accents, measured ~18x worse than VM) are pixel-coarse; this
+// sharpens them while leaving the adaptive gradient fills untouched. Internally metric-guarded ->
+// cannot regress (returns the original result if nothing wins).
+async function superRetraceRegion(result, segSource, pipelineOptions, referenceImageData, guardOptions) {
+  if (!result || !result.difference || result.difference.error) return result;
+  try {
+    const cand = result.candidate;
+    const slic = computeSlicSuperpixels(segSource, { regionSize: cand.regionSize, compactness: cand.compactness, iterations: cand.iterations });
+    let reg = mergeSuperpixels(slic, segSource, { mergeThreshold: cand.mergeThreshold });
+    if (cand.split) { const rf = refineRegions(reg, segSource, pipelineOptions); if (rf) reg = rf; }
+    const variants = [
+      { name: "region-super2", superSample: 2, coordinateOffset: 0.5, simplifyTolerance: 0.12, cornerAngle: 0.65 },
+      { name: "region-super2-topo", superSample: 2, superTopo: true, coordinateOffset: 0.5, simplifyTolerance: 0.12, cornerAngle: 0.65 }
+    ];
+    let best = result;
+    for (const v of variants) {
+      const tr = traceRegionsToSvg(reg, { ...pipelineOptions, regionBoundary: v }, segSource);
+      tr.pathCount = countSvgElements(tr.svg, "path");
+      let diff = null;
+      try { diff = await measureSvgDifference(referenceImageData, tr.svg, guardOptions); } catch (e) { continue; }
+      if (!diff || diff.error) continue;
+      const edgeBetter = diff.edgeWeightedRmse < best.difference.edgeWeightedRmse - 0.00005;
+      const hotOk = diff.hotPixelRatio <= best.difference.hotPixelRatio + 0.005;
+      const pathsOk = tr.pathCount <= Math.ceil(result.paths * 1.3);
+      if (edgeBetter && hotOk && pathsOk) {
+        best = { candidate: { ...result.candidate, superVariant: v.name }, traced: tr, difference: diff, paths: tr.pathCount };
+      }
+      await nextFrame();
+    }
+    return best;
+  } catch (e) {
+    return result;
+  }
+}
+
 // Downscale an ImageData to a max dimension via canvas (high-quality), for fast optimizer eval.
 function downscaleImageData(imageData, maxDim) {
   const { width, height } = imageData;
@@ -5491,6 +5529,8 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
   };
 
   if (!downscaled) {
+    best = await superRetraceRegion(best, segSource, pipelineOptions, referenceImageData, guardOptions);
+    stats.superRetrace = best.candidate.superVariant || "none";
     best.traced.regionOptimization = stats;
     return best.traced;
   }
@@ -5534,6 +5574,10 @@ async function optimizeRegionTrace(segSource, referenceImageData, pipelineOption
   stats.fullResBaseEdgeRmse = fullBase.difference?.edgeWeightedRmse;
   stats.fullResSelectedEdgeRmse = fullBest.difference?.edgeWeightedRmse;
   stats.fullResSelectedPaths = fullBest.paths;
+  fullBest = await superRetraceRegion(fullBest, segSource, pipelineOptions, referenceImageData, guardOptions);
+  stats.superRetrace = fullBest.candidate.superVariant || "none";
+  stats.superRetraceEdgeRmse = fullBest.difference?.edgeWeightedRmse;
+  stats.superRetracePaths = fullBest.paths;
   fullBest.traced.regionOptimization = stats;
   return fullBest.traced;
 }
