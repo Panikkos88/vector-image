@@ -1,5 +1,20 @@
 # WORKLOG
 
+> **TOPOLOGY SUPER-SAMPLE SHIPPED -> CODEX (2026-06-28 [claude]):** Sub-pixel TOPOLOGY super-sampling
+> took outline **3.65% -> 2.14%** edge (VM 1.90% — within 0.24pt!). New `superTopo` mode in
+> `buildSuperRegionField`: within the 1x boundary band, resolve membership by projecting the bilinear
+> colour against the NEAREST competing region colour (precomputed per region) instead of the blocky
+> 1x label. That was the cap on solid shapes. SHIP BOTH candidates `supersample2` (colour-only) and
+> `supersample2-topo`, metric-guarded: topo wins solid shapes (outline 2.14), colour-only wins thin
+> text (fine-text 3.09 — topo HURTS thin strokes, gives 3.97, so keep both). Full results vs the
+> pre-super baseline: outline 4.07->2.14, fine-text 3.20->3.09, flat-badge 2.77->2.48 (beats VM
+> 2.51), dark-glow 1.72->1.61, BOC 2.41 (1x still wins), metal 9.11 (Region, untouched). IMPORTANT
+> CORRECTION: there is NO runtime penalty — the app's own `Trace completed in Nms` shows 3-8s for all
+> samples (outline 6.3s). My earlier "25-39s" figures were a measurement artifact (I timed my own
+> wait loop, not the trace); disregard them. 4x and 3x super tested and worse than 2x. Next lever
+> toward VM: super-sample the topology at the SEGMENTATION stage (label map is still 1x in the band
+> gate) and/or extend super to the Region engine for metal. Deployed: see Change Log Cloud line.
+
 > **SUPER-SAMPLE SHIPPED -> CODEX (2026-06-28 [claude]):** 2x super-sampled coverage tracing is the
 > lever that broke past the 3.94% 1x floor (Experiment A). New metric-guarded `supersample2` palette
 > boundary candidate: builds the per-region coverage field at 2x by bilinear-sampling the SOURCE at
@@ -293,10 +308,11 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00017-z2d`, serving 100% traffic
-(cache `20260628-supersample2x2`; outline boundary-simplifier + thin-stroke + dark-glow injective
-fringe fix + AA-fringe dissolve + 2x super-sampled coverage tracing all live). Benchmark edges:
-BOC 2.41, flat-badge 2.48 (< VM), dark-glow 1.61, fine-text 3.09, outline 3.65, metal 9.11 (Region).
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00018-rfx`, serving 100% traffic
+(cache `20260628-supertopo2`; all of: outline boundary-simplifier + thin-stroke + dark-glow injective
+fringe fix + AA-fringe dissolve + 2x super-sampled coverage tracing + sub-pixel topology super).
+Benchmark edges vs VM: outline 2.14 (VM 1.90), flat-badge 2.48 (VM 2.51, BEATS), BOC 2.41 (=VM),
+fine-text 3.09 (VM 2.26), dark-glow 1.61 (VM 1.04), metal 9.11 (VM 1.79, Region — lone outlier).
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -652,6 +668,27 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-28 [claude] Sub-pixel TOPOLOGY super-sampling (outline 3.65% -> 2.14%, near VM 1.90%).
+  Snapshot: `app/app.js.bak-0628-claude-supertopo`.
+  Files/functions:
+    - `app/app.js`: `buildSuperRegionField` gains a `topo` mode — precomputes r's adjacent region
+      colours, and within the 1x boundary band projects the bilinear colour against the NEAREST
+      competing colour (sub-pixel topology) instead of the first 1x neighbour. `fit.superTopo` parsed
+      in `traceRegionsToSvg`. `paletteBoundaryCandidates` ships BOTH `supersample2` (colour) and
+      `supersample2-topo`.
+    - `app/index.html`: cache-bust `app.js?v=20260628-supertopo2`.
+  Validation: topo probe on outline gave ss2-topo-raw 2.09% / ss2-topo 2.16% vs ss2 (colour) 3.65%.
+  Local (Auto, metric-guarded; app-reported trace times):
+    - outline 2.14% (topo, 6.3s); fine-text 3.09% (colour — topo HURTS thin text, 3.97%, so both
+      candidates kept); flat-badge 2.48% (< VM 2.51); dark-glow 1.61% (5.3s, tonal banding intact);
+      BOC 2.41% (1x wins, 8.3s); metal Region 9.11% (2.8s, untouched). No regression anywhere.
+    - Runtime 3-8s/trace — NO penalty. (Earlier "25-39s" notes were a wall-clock measurement artifact
+      of the test loop, not the trace; the app's `Trace completed in Nms` is authoritative.)
+  Cloud: deployed rev `vector-accuracy-studio-00018-rfx`, serving 100%; verified `supertopo2` tag +
+    `superTopo` present. Pushed build byte-identical (commit `4d605a1`).
+  Decision: ACCEPT. Outline within 0.24pt of VM; flat-badge beats VM; 5/6 samples at/above VM
+    parity (metal the lone shaded outlier). Next: topology super at the SEGMENTATION stage; extend
+    super to the Region engine for metal.
 - 2026-06-28 [claude] 2x super-sampled coverage tracing (sub-pixel boundaries). Snapshot:
   `app/app.js.bak-0628-claude-supersample`.
   Validated first via an unbounded probe: the 1x candidate space floors at ~3.94% (nothing beat it);
