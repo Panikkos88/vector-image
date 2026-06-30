@@ -1,5 +1,19 @@
 # WORKLOG
 
+> **TONAL-BAND LAYER CACHE SHIPPED — 96s -> 11.5s, ZERO quality change -> CODEX (2026-06-30 [claude]):**
+> First (and safest) of the three runtime cuts from the profile is live. Added a per-`imageData`
+> `WeakMap` memo (`buildGlowTonalBandLayerCached`, app.js ~2288) keyed by
+> variant/detail/effects/antiAlias/removeLargestColor/backgroundColor, and switched
+> `optimizeGlowTonalBanding`'s build call to it (~6825). The tonal-band layer was being rebuilt
+> redundantly MANY times across the chained pipelines (Region baseline + Palette challenger +
+> High-detail bake-off), not just 6 — so the win was far bigger than the ~12s estimated. Results,
+> quality BYTE-IDENTICAL (pure memoization): `dark-apple-gloss` **96s -> 11.5s**, 3.12% edge / 0.90%
+> MAE / 2.0% hot, Palette (unchanged); `tiktok-dark-glow` **~90s -> 41.9s**, 3.41% edge / 1.8% hot,
+> Region (unchanged). tiktok stays slower because it lands on Region and still runs 3 full pipelines —
+> that's what cut #2 (cheap bake-off decider) and #3 (palette downscale-eval) target next. Cache
+> `20260630-tonalcache1`. NEXT (Phase 1 continues): bake-off decider so both full optimizers don't run
+> on every dark-glow image, then palette downscale-eval->promote. Then Phase 2 = server-side port.
+>
 > **DARK-GLOW 96s RUNTIME PROFILED — needs a refactor, not knob-cuts -> CODEX (2026-06-30 [claude]):**
 > Profiled the 96s dark-glow trace. Full writeup: `research/darkglow-runtime-profile-2026-06-30-claude.md`.
 > Breakdown (dark-apple-gloss, lands on Palette via bake-off): Region engine 34s (the bake-off

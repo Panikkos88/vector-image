@@ -2279,6 +2279,30 @@ function traceTonalThreshold(scores, width, height, threshold, options) {
   };
 }
 
+// Per-image cache for the tonal-band layer. The band fragment depends only on the source image +
+// options, but optimizeGlowTonalBanding runs in BOTH the Region trace and the palette bake-off
+// challenger within one trace (same referenceImageData object), rebuilding the identical layer for
+// each tonal variant -> ~half the ~24s tonal cost is duplicated. Keyed on the imageData (WeakMap,
+// auto-freed) + the options that affect the build.
+const __tonalBandLayerCache = new WeakMap();
+function buildGlowTonalBandLayerCached(imageData, pipelineOptions = {}) {
+  const bg = pipelineOptions.backgroundColor;
+  const key = [
+    pipelineOptions.tonalBandVariant || "baseline",
+    pipelineOptions.detail || "medium",
+    pipelineOptions.effects || "",
+    pipelineOptions.antiAlias || "",
+    pipelineOptions.removeLargestColor ? 1 : 0,
+    Array.isArray(bg) ? bg.map((c) => Math.round(c)).join(",") : "auto"
+  ].join("|");
+  let perImage = __tonalBandLayerCache.get(imageData);
+  if (!perImage) { perImage = new Map(); __tonalBandLayerCache.set(imageData, perImage); }
+  if (perImage.has(key)) return perImage.get(key);
+  const layer = buildGlowTonalBandLayer(imageData, pipelineOptions);
+  perImage.set(key, layer);
+  return layer;
+}
+
 function buildGlowTonalBandLayer(imageData, pipelineOptions = {}) {
   const options = glowTonalBandOptions(pipelineOptions, imageData);
   if (!options.enabled) {
@@ -6798,7 +6822,7 @@ async function optimizeGlowTonalBanding(baseTraced, referenceImageData, pipeline
   for (const variant of variants) {
     const variantOptions = { ...pipelineOptions, tonalBandVariant: variant };
     const optimizer = glowTonalBandOptions(variantOptions, referenceImageData);
-    const layer = buildGlowTonalBandLayer(referenceImageData, variantOptions);
+    const layer = buildGlowTonalBandLayerCached(referenceImageData, variantOptions);
     if (!firstStats) firstStats = layer.stats;
     if (!layer.fragment) {
       candidateSummaries.push({
