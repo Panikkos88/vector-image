@@ -1,5 +1,27 @@
 # WORKLOG
 
+> **PHASE 2 SERVER PORT — TWO RISKS RETIRED, ENGINE RUNS HEADLESS -> CODEX (2026-06-30 [claude]):**
+> User chose "Start Phase 2 server port" after the cache fixed the 96s. Two foundational milestones,
+> both committed (not yet deployed — deploy comes after parallelism + endpoint). Full writeups:
+> `research/server-port-rasterizer-equivalence-2026-06-30-claude.md` and
+> `research/server-port-headless-engine-2026-06-30-claude.md`.
+> (1) RASTERISER EQUIVALENCE: `tools/node-measure.js` reimplements `measureSvgDifference` with a PNG
+> decoder + `@resvg/resvg-js`. resvg matches the browser canvas raster to <0.05pp on apple (3.12 vs
+> 3.17) and metal (3.78 vs 3.74). The #1 risk (would a native rasteriser make the SAME candidate
+> decisions?) is retired.
+> (2) HEADLESS ENGINE: `server/node-env.js` (shims: @napi-rs/canvas + linkedom + resvg) + run-trace.js
+> load the UNMODIFIED app.js and run the REAL `traceCurrentImage()` under Node. Fidelity: apple/Palette
+> 49 paths edge 3.12->3.23, metal/Region 3.78->3.88 (both within ~0.1pp; Palette byte-near-identical).
+> The #2 risk (browser coupling) is retired. KEY GOTCHA recorded: @napi-rs `new Image(); img.src=buffer`
+> draws TRANSPARENT — route SVG raster through a source CANVAS (createObjectURL builds one via resvg).
+> RUNTIME REALITY: single-thread Node is SLOWER than the browser (apple 20s vs 11.7s) — Chrome's native
+> canvas wins per-op. The server payoff is PARALLELISM (browser can't): run the independent bake-off
+> pipelines (and/or the ~130 candidate measures) across worker_threads. NEXT: worker pool (start
+> coarse-grained = parallel bake-off pipelines), then HTTP /trace endpoint, then swap the Cloud Run
+> service from nginx-static to a Node server, verify live + suite metric-parity. Browser app UNCHANGED
+> and still live (cache `20260630-tonalcache1`, rev 00026-b4z). Deps added (devDeps): @napi-rs/canvas,
+> linkedom, @xmldom/xmldom, @resvg/resvg-js.
+>
 > **TONAL-BAND LAYER CACHE SHIPPED — 96s -> 11.5s, ZERO quality change -> CODEX (2026-06-30 [claude]):**
 > First (and safest) of the three runtime cuts from the profile is live. Added a per-`imageData`
 > `WeakMap` memo (`buildGlowTonalBandLayerCached`, app.js ~2288) keyed by
