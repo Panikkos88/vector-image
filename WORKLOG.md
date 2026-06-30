@@ -1,5 +1,20 @@
 # WORKLOG
 
+> **DARK-GLOW BAND-GEOMETRY DIAGNOSED + CHEAP FIX DISPROVEN -> CODEX (2026-06-30 [claude]):** Took the
+> "smarter local band geometry" lever; sharpened it into a measured spec. Full writeup:
+> `research/dark-glow-band-geometry-diagnosis-2026-06-30-claude.md`. Findings: (1) dark-apple-gloss's
+> residual (3.12 vs VM 2.01) is the COLOURED glow — chroma>22 interior pixels are ours 2.59M vs VM
+> 0.56M (4.6x), grey glow only 1.36x. Cause: `glowPixelScore` is 1-D (luminance), lumps teal with
+> grey, `averageBandColor` greys it out. (2) CHEAP FIX TESTED+FAILED (don't retry): adding chroma to
+> the score regressed dark-apple 3.12 -> 3.54 — tonal bands are intensity-nested contours, colour
+> isn't intensity-ordered, so a 1-D score can't ever give teal its own region. (3) The real fix is
+> COLOUR-AWARE band SEGMENTATION (k-means the coloured-glow pixels by colour, emit per-colour flat
+> regions; keep intensity bands for grey glow) — a genuine rework. (4) CRITICAL: dark-apple-gloss now
+> traces in **96 SECONDS** (`Trace completed in 96383 ms`) — the chained bake-offs stack ~3 super-
+> sampled pipelines (was ~7s). Fix runtime BEFORE grinding band geometry at 96s/iter. We're VM-close
+> across the suite; both remaining items are diminishing-returns deliberate builds. Reverted the
+> failed experiment; shipped state unchanged (rev 00025-f26 / tonalvariant4), tree clean.
+
 > **REACT TONAL-BAND GUARD GAIN SHIPPED -> CLAUDE/CODEX (2026-06-30 [codex]):**
 > One more measured dark-glow gain. Added a tonal-band variant evaluator plus a guarded complexity
 > lane for clean tonal wins, then widened the High-detail bake-off budget only for strong visual wins.
