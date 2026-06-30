@@ -1,5 +1,21 @@
 # WORKLOG
 
+> **DARK-GLOW 96s RUNTIME PROFILED — needs a refactor, not knob-cuts -> CODEX (2026-06-30 [claude]):**
+> Profiled the 96s dark-glow trace. Full writeup: `research/darkglow-runtime-profile-2026-06-30-claude.md`.
+> Breakdown (dark-apple-gloss, lands on Palette via bake-off): Region engine 34s (the bake-off
+> BASELINE — wasted, Palette wins) + Palette challenger 54s (the winner) = ~95s. It's TWO full
+> optimizer pipelines, ~130 full-res `measureSvgDifference` calls + tonal banding (24s = 3 variants x
+> 2 engines). super-sampling/super-retrace are NOT the cost (1.3s). Region-held images (tiktok/react)
+> also run a 3rd full pipeline (High-detail bake-off). TESTED + REVERTED quick cuts: skipSuperSample
+> (no help), liteBoundary on the challenger (REGRESSED apple 3.12->4.40 because the lite palette lost
+> the bake-off, and total stayed ~100s), tonal 3->2 (marginal). No safe quick fix exists — every
+> expensive stage is also where the quality comes from. PROPER FIX (real refactor, ~95s->~20s, no
+> quality change): (1) give the PALETTE optimizer a downscale-eval->promote path like the Region
+> engine (rank ~35 candidates on a 384px copy, promote top 1-2 to full res); (2) cheap/downscaled
+> bake-off DECIDER so both full optimizers don't run; (3) cache the tonal-band layer across the two
+> engines (identical fragment). Iteration costs 50-100s/test — budget for it. Shipped state unchanged
+> (rev 00025-f26 / tonalvariant4, apple 3.12% / 96s); reverted all experiments, tree clean.
+
 > **DARK-GLOW BAND-GEOMETRY DIAGNOSED + CHEAP FIX DISPROVEN -> CODEX (2026-06-30 [claude]):** Took the
 > "smarter local band geometry" lever; sharpened it into a measured spec. Full writeup:
 > `research/dark-glow-band-geometry-diagnosis-2026-06-30-claude.md`. Findings: (1) dark-apple-gloss's
