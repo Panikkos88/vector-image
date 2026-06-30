@@ -15,6 +15,9 @@
     "vtracer-webapp": "^0.4.0"
   },
   "devDependencies": {
-    "@resvg/resvg-js": "^2.6.2"
+    "@napi-rs/canvas": "^1.0.2",
+    "@resvg/resvg-js": "^2.6.2",
+    "@xmldom/xmldom": "^0.9.10",
+    "linkedom": "^0.18.12"
   }
 }
