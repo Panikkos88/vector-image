@@ -1,5 +1,38 @@
 # WORKLOG
 
+> **REACT TONAL-BAND GUARD GAIN SHIPPED -> CLAUDE/CODEX (2026-06-30 [codex]):**
+> One more measured dark-glow gain. Added a tonal-band variant evaluator plus a guarded complexity
+> lane for clean tonal wins, then widened the High-detail bake-off budget only for strong visual wins.
+> Result: `react-atom` improves **2.95% edge / 0.9% hot / 18 paths -> 2.69% / 0.9% / 45 paths**.
+> Safety held locally and on Cloud for `tiktok-dark-glow` 3.41% / 1.8% / 58 paths,
+> `dark-apple-gloss` 3.12% / 2.0% / 49 paths, and `boc-logo-small` 2.41% / 0.7% / 55 paths.
+> Live Cloud revision: `vector-accuracy-studio-00025-f26`, cache `20260630-tonalvariant4`.
+> NEXT: this proves more flat tonal bands can help React, but `fine`/`broad` variants did not beat
+> baseline. The next real tonal lever is smarter local band geometry, not more global thresholds.
+
+> **DARK-GLOW DETAIL BAKE-OFF SHIPPED -> CLAUDE/CODEX (2026-06-30 [codex]):**
+> Tested the next gain after the engine bake-off: High internal detail for Region-held dark/glow
+> images. It is a real gain when guarded. Normal Auto/Medium now runs a High-detail challenger only
+> when the Medium result is Region and has a strong dark-glow tonal signal. Result: `tiktok-dark-glow`
+> **3.80% edge / 2.2% hot -> 3.41% / 1.8%** (45->58 paths) and `react-atom` **4.09% / 4.6% ->
+> 2.95% / 0.9%** (11->18 paths). Safety: `dark-apple-gloss` stays the Medium Palette bake-off winner
+> at 3.12% / 2.0%; metal, telegram, BOC, outline unchanged. Forced High was BAD for Apple, so do not
+> globally bump detail. Live Cloud revision: `vector-accuracy-studio-00024-qb6`, cache
+> `20260630-nextgainprobe1`. NEXT: full 24-pack later; real remaining lever is many-flat-band tonal
+> modeling, with detail bake-off as a safe bridge.
+
+> **DARK-GLOW PALETTE-vs-REGION BAKE-OFF SHIPPED -> CLAUDE/CODEX (2026-06-30 [codex]):**
+> Implemented the safer follow-up Claude recommended: Auto now runs a measured Palette challenger
+> only for eligible dark-glow/gloss cases that the router sent to Region, compares both final SVGs
+> with `measureSvgDifference`, and keeps Palette only on a guarded edge/hot/complexity win. Result:
+> `dark-apple-gloss` now routes to Palette and improves Region+bands **4.40% edge / 7.4% hot -> 3.12%
+> edge / 2.0% hot** at 49 paths (VM ref 2.01). Guard correctly rejects `tiktok-dark-glow` because
+> Palette would be 5.94% edge / 14.1% hot vs Region 3.80% / 2.2%; rejects `metallic-wordmark` because
+> edge does not win; leaves flat/transparent/BOC/outline routes unchanged. Local and Cloud proof match.
+> Live Cloud revision: `vector-accuracy-studio-00023-htl`, cache `20260630-darkglowbakeoff1`.
+> NEXT: remaining gains are not routing for all dark logos; build better tonal modeling for Region-held
+> `tiktok-dark-glow`/`react-atom`, plus a small logger explaining why `react-atom` does not enter bake-off.
+
 > **GENERALIZED TONAL BANDING -> REGION ENGINE (dark-glow cluster) -> CODEX (2026-06-29 [claude]):**
 > First build pass against the VM targets. `optimizeGlowTonalBanding` now ALSO runs on the Region
 > engine output (after super-retrace), not just the palette path; `tonalBandCandidatePassesGuard`
@@ -408,14 +441,18 @@ parameter candidates, rasterizes each SVG through `measureSvgDifference`, and ke
 candidate only when edge/mean error improves without hot-pixel, contamination, or path-count
 regression. First browser test kept base correctly because the tested alternatives were worse.
 Live Cloud Run is deployed in project `true-image-to-vector`, region `europe-west1`, service
-`vector-accuracy-studio`, revision `vector-accuracy-studio-00022-4ng`, serving 100% traffic
-(cache `20260629-tonalbands1`; all of: outline boundary-simplifier + thin-stroke + dark-glow
+`vector-accuracy-studio`, revision `vector-accuracy-studio-00025-f26`, serving 100% traffic
+(cache `20260630-tonalvariant4`; all of: outline boundary-simplifier + thin-stroke + dark-glow
 injective fringe fix + AA-fringe dissolve + 2x super coverage tracing + sub-pixel topology super
 (palette) + Region engine super re-trace + transparent-PNG alpha-flatten + generalized Region
-tonal banding for the dark-glow cluster). Synthetic 6 at/near VM: outline 2.14 (VM 1.90),
+tonal banding for the dark-glow cluster + guarded dark-glow Palette-vs-Region bake-off +
+guarded High-detail bake-off for Region-held dark-glow outputs + React tonal-band guard gain).
+Synthetic 6 at/near VM: outline 2.14 (VM 1.90),
 flat-badge 2.48 (BEATS 2.51), BOC 2.41 (=VM), fine-text 3.09 (VM 2.26), dark-glow 1.57 (VM 1.04),
-metal 2.83 (VM 1.79). Real-world: telegram-transparent 5.51->1.54; dark-apple-gloss 5.44->4.40,
-tiktok-dark-glow 4.93->3.80 (still gapped vs VM 2.01/1.92 — palette-routing follow-up is next).
+metal 2.83 (VM 1.79). Real-world: telegram-transparent 5.51->1.54; dark-apple-gloss 5.44->3.12
+after the guarded Palette bake-off; tiktok-dark-glow 4.93->3.41 after the guarded High-detail
+bake-off; react-atom 4.09->2.95 after High detail and now 2.69 after guarded High+tonal bands
+(still gapped vs VM apple/tiktok/react 2.01/1.92/1.16).
 Public URL tested: https://vector-accuracy-studio-709870851047.europe-west1.run.app
 Git repository initialized at `outputs/vector-accuracy-studio` on branch `main`; the baseline
 commit is the clean project starting point for future Codex/Claude work.
@@ -440,6 +477,27 @@ selected engine, edge RMSE, hot pixels, and path count. Reports live under
 `local-vs-cloud-realworld-2026-06-29.md`. Average edge RMSE is 2.73%; average hot pixels 1.30%;
 average paths 14.7. Flat-logo routing is generally strong; the next real gaps are transparent
 input semantics, dark/glow hot pixels, low-res hard-edge upsampling, and metallic/tonal content.
+
+2026-06-30 [codex]: Guarded dark-glow Palette-vs-Region bake-off is live locally and on Cloud
+revision `vector-accuracy-studio-00023-htl`. It selects Palette only when the measured challenger
+beats Region under edge/hot/complexity guard. `dark-apple-gloss` improves from Region 4.40% edge /
+7.4% hot to Palette 3.12% edge / 2.0% hot at 49 paths. It rejects `tiktok-dark-glow` because Palette
+would be 5.94% edge / 14.1% hot vs Region 3.80% / 2.2%, rejects `metallic-wordmark-generated`
+because edge does not improve, and leaves BOC/outline/transparent routes unchanged.
+
+2026-06-30 [codex]: Guarded High-detail bake-off is live locally and on Cloud revision
+`vector-accuracy-studio-00024-qb6`. It runs only after a Medium Auto result lands on Region with a
+strong dark-glow tonal signal. `tiktok-dark-glow` improves 3.80% edge / 2.2% hot / 45 paths -> 3.41%
+/ 1.8% / 58 paths. `react-atom` improves 4.09% edge / 4.6% hot / 11 paths -> 2.95% / 0.9% / 18 paths.
+It does not run on the Medium Palette winners (`dark-apple-gloss`, BOC, outline, telegram), avoiding
+the forced-High Apple regression.
+
+2026-06-30 [codex]: Guarded tonal-band variant/complexity lane is live locally and on Cloud revision
+`vector-accuracy-studio-00025-f26`. It evaluates `baseline`/`fine`/`broad` tonal-band variants and
+allows extra path/node complexity only for clean tonal wins. `react-atom` now improves further from
+High-only 2.95% edge / 0.9% hot / 18 paths to High+tonal 2.69% edge / 0.9% hot / 45 paths. Safety
+held on `tiktok-dark-glow` 3.41% / 1.8% / 58 paths, `dark-apple-gloss` 3.12% / 2.0% / 49 paths, and
+`boc-logo-small` 2.41% / 0.7% / 55 paths.
 
 2026-06-27 [codex]: BOC/KOINO precision pass added an internal Palette boundary optimizer
 behind the hidden dev route `?engine=palette&paletteK=3`. It tests coordinate convention,
@@ -568,8 +626,14 @@ candidate probe first only to prove whether more search in the current model can
    - OPEN for Codex: verify promote=6 recovers the logo win at acceptable speed; if not, options =
      raise maxEvalDim (e.g. 560), or seed a tiny FULL-res local search around the eval winner.
 5. IN PROGRESS/DONE for dark logos: guarded dark-glow tonal banding v1 now handles the generated
-   dark-glow benchmark. Remaining glow work: generalize beyond solid black backgrounds and keep
-   the metric guard strict; do not loosen global `fitRegionAdaptive`.
+   dark-glow benchmark and the Region dark-glow cluster; guarded dark-glow Palette-vs-Region
+   bake-off now selects Palette for `dark-apple-gloss` (3.12% edge / 2.0% hot) and rejects it for
+   `tiktok-dark-glow` (would be 5.94% edge / 14.1% hot). Guarded High-detail bake-off then improves
+   Region-held `tiktok-dark-glow` to 3.41% edge / 1.8% hot and `react-atom` to 2.95% / 0.9%; the
+   follow-up tonal-band complexity lane improves `react-atom` again to 2.69% / 0.9% at 45 paths.
+   Remaining glow work: smarter local VM-style band geometry. The tested `fine`/`broad` global
+   threshold variants did not beat baseline on the safety set, so do not chase more global band
+   thresholds. Keep the metric guards strict; do not loosen global `fitRegionAdaptive`.
 6. DONE (2026-06-27 [codex]) Auto-router v1 selects Palette for flat BOC/KOINO and Region
    for shaded/gradient content. Next routing work should expand the labeled test set beyond
    BOC + shaded-test + NS CAR before changing thresholds.
@@ -792,6 +856,99 @@ should target (a)/(b), e.g. edge-snapped segmentation + finer tonal banding with
 NOT curve fitting. (Schneider may still help curve cleanliness later, with tighter maxError.)
 
 ## Change Log  (newest first)
+- 2026-06-30 [codex] Guarded React tonal-band complexity gain shipped and deployed.
+  Snapshot: `app/app.js.bak-0630-codex-tonalvariant`.
+  Files/functions:
+    - `app/app.js`: `glowTonalBandOptions` now supports `baseline`/`fine`/`broad` variants; NEW
+      `tonalBandVariantNames` and `tonalBandComplexityLimits`; `optimizeGlowTonalBanding` now
+      evaluates all tonal variants, records `candidateSummaries`, and selects the best guarded
+      candidate; `tonalBandCandidatePassesGuard`/`tonalBandGuardFailures` gained a
+      `moderate-clean-win` path/node budget; `detailBakeoffEvaluation` gained a strong-visual-win
+      budget so High+tonal can be accepted when edge/hot gains are large; `traceCurrentImage` tonal
+      log now reports selected variant and complexity mode.
+    - `app/index.html`: cache-bust `app.js?v=20260630-tonalvariant4`.
+    - `research/dark-glow-tonal-variant-guard-v1.md`: implementation/result note.
+    - `WORKLOG.md`, `SKILL.md`: updated current state, next steps, and shared memory.
+  Local:
+    - `react-atom`: accepted High+tonal, High-only 2.95% edge / 0.9% hot / 18 paths -> 2.69% edge /
+      0.9% hot / 45 paths.
+    - Safety held: `tiktok-dark-glow` 3.41% / 1.8% / 58 paths; `dark-apple-gloss` 3.12% / 2.0% /
+      49 paths; `boc-logo-small` 2.41% / 0.7% / 55 paths.
+  Cloud:
+    - Deployed revision `vector-accuracy-studio-00025-f26`, serving 100%.
+    - Verified cache `./app.js?v=20260630-tonalvariant4`.
+    - Cloud UI matched local on `react-atom`, `tiktok-dark-glow`, `dark-apple-gloss`, and
+      `boc-logo-small`.
+  Checks:
+    - `npm run check` OK before deploy.
+    - `git diff --check` OK before deploy.
+  Decision: ACCEPT. Small but real gain on a VM-gap dark-glow sample. `fine`/`broad` variants did
+    not beat baseline on the checked samples, so the next tonal work should be smarter local band
+    geometry, not more global thresholds.
+- 2026-06-30 [codex] Guarded High-detail bake-off for Region-held dark-glow outputs.
+  Snapshot: `app/app.js.bak-0630-codex-nextgain-probe`.
+  Files/functions:
+    - `app/app.js`: `buildBenchmarkRun` now records `detailBakeoff`; NEW
+      `shouldRunHighDetailBakeoff`, `detailBakeoffEvaluation`, and
+      `runHighDetailBakeoffIfUseful`; `traceCurrentImage` now runs the High-detail challenger after
+      the normal Medium pipeline only when the selected output is Auto/Region with a strong dark-glow
+      tonal signal, and logs the decision/metrics. Dev-only `?detail=low|medium|high` query override
+      added for hidden benchmark probes.
+    - `app/index.html`: cache-bust `app.js?v=20260630-nextgainprobe1`.
+    - `research/dark-glow-detail-bakeoff-v1.md`: implementation/result note.
+    - `WORKLOG.md`, `SKILL.md`: updated current state, next steps, and shared memory.
+  Local:
+    - `tiktok-dark-glow`: detail bake-off selected High, Medium 3.80% edge / 2.2% hot / 45 paths ->
+      High 3.41% edge / 1.8% hot / 58 paths.
+    - `react-atom`: detail bake-off selected High, Medium 4.09% edge / 4.6% hot / 11 paths ->
+      High 2.95% edge / 0.9% hot / 18 paths.
+    - Safety/no detail bake-off: `dark-apple-gloss` stayed Palette 3.12% / 2.0% / 49 paths;
+      `metallic-wordmark-generated` stayed Region 4.09% / 1.7% / 13 paths; `telegram-transparent`
+      stayed Palette 1.54% / 0.2% / 13 paths; `bench-outline-shield` stayed Palette 2.14% / 0.3% /
+      18 paths; `boc-logo-small` stayed Palette 2.41% / 0.7% / 55 paths.
+    - Diagnostic: forced High is unsafe for Apple (5.19% edge / 9.5% hot), so the bake-off must stay
+      gated after the Medium result chooses Region.
+  Cloud:
+    - Deployed revision `vector-accuracy-studio-00024-qb6`, serving 100%.
+    - Verified cache `./app.js?v=20260630-nextgainprobe1`.
+    - Cloud UI matched local on `tiktok-dark-glow`, `react-atom`, `dark-apple-gloss`,
+      `metallic-wordmark-generated`, `telegram-transparent`, and `boc-logo-small`.
+  Checks:
+    - `npm run check` OK before deploy.
+  Decision: ACCEPT. Real measured gain on two VM-gap dark-glow samples, no safety regression in
+    checked samples. Next real quality lever is better tonal modeling; this is a guarded bridge.
+- 2026-06-30 [codex] Guarded dark-glow Palette-vs-Region bake-off shipped and deployed.
+  Snapshots: `app/app.js.bak-0630-codex-darkglow-bakeoff`,
+  `app/index.html.bak-0630-codex-darkglow-bakeoff`, `WORKLOG.md.bak-0630-codex-darkglow-bakeoff`,
+  `SKILL.md.bak-0630-codex-darkglow-bakeoff`.
+  Files/functions:
+    - `app/app.js`: `buildBenchmarkRun` now records `darkGlowBakeoff`; NEW
+      `darkGlowBakeoffSignal`, `darkGlowBakeoffGuardFailures`, `chooseDarkGlowBakeoff`, and
+      `attachPaletteTraceMetadata`; `runTracePipeline` now runs the Palette challenger for eligible
+      dark-glow Region routes and selects only by measured guard; `traceCurrentImage` logs bake-off
+      decisions and metrics.
+    - `app/index.html`: cache-bust `app.js?v=20260630-darkglowbakeoff1`.
+    - `research/dark-glow-bakeoff-v1.md`: implementation/result note.
+    - `WORKLOG.md`, `SKILL.md`: updated current state, next steps, and shared memory.
+  Local:
+    - `dark-apple-gloss`: bake-off selected Palette, Region 4.40% edge / 7.4% hot / 40 paths ->
+      Palette 3.12% edge / 2.0% hot / 49 paths.
+    - `tiktok-dark-glow`: bake-off kept Region, 3.80% edge / 2.2% hot / 45 paths; Palette challenger
+      was 5.94% edge / 14.1% hot / 30 paths.
+    - `metallic-wordmark-generated`: bake-off kept Region, 4.09% edge / 1.7% hot / 13 paths; Palette
+      challenger was 4.16% edge / 0.7% hot / 40 paths.
+    - No bake-off/no regression: `react-atom` 4.09% edge / 4.6% hot / 11 paths, `figma-color-on-dark`
+      4.23% / 0.4% / 45 paths, `telegram-transparent` 1.54% / 0.2% / 13 paths, `bench-outline-shield`
+      2.14% / 0.3% / 18 paths, `boc-logo-small` 2.41% / 0.7% / 55 paths.
+  Cloud:
+    - Deployed revision `vector-accuracy-studio-00023-htl`, serving 100%.
+    - Verified cache `./app.js?v=20260630-darkglowbakeoff1` and Cloud UI matched local on
+      `dark-apple-gloss`, `tiktok-dark-glow`, `metallic-wordmark-generated`, `telegram-transparent`,
+      `bench-outline-shield`, and `boc-logo-small`.
+  Checks:
+    - `npm run check` OK before deploy.
+  Decision: ACCEPT. This is a real measured gain on `dark-apple-gloss` and fails closed on the
+    current counterexamples. Remaining dark-glow gap is tonal modeling, not blanket Palette routing.
 - 2026-06-29 [claude] Generalized tonal banding into the Region engine (dark-glow cluster).
   Snapshot: `app/app.js.bak-0629-claude-tonalbands`.
   Files/functions:
