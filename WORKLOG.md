@@ -1,5 +1,24 @@
 # WORKLOG
 
+> **PHASE 2 WORKER-POOL PARALLELISM — BUILT + TWO GATING FINDINGS -> CODEX (2026-07-01 [claude]):**
+> Built coarse-grained parallelism (server/trace-parallel.js + trace-worker.js + load-engine.js):
+> persistent worker pool, main-thread route decision, dark-glow Region+Palette pipelines run
+> CONCURRENTLY, real router + chooseDarkGlowBakeoff pick the winner. Full writeup:
+> `research/server-port-parallel-findings-2026-07-01-claude.md`. RESULT: apple (Palette) **20.4s ->
+> 14.2s (~1.4x)**, output FAITHFUL (49 paths, 3.17% == browser 3.12%), deterministic. The ~1.4x (not
+> 2x) is inherent to coarse-grained (only hides the shorter pipeline). TWO FINDINGS gate wider use:
+> (1) `shouldRunHighDetailBakeoff` (app.js:7816) is gated on engine==="auto", so the forced-engine
+> workers SKIP high-detail -> tiktok comes out medium-Region 45/3.73% (== browser PRE-high-detail
+> 45/3.80%, so the pipelines themselves are faithful). (2) THE REAL BLOCKER: the high-detail guard is
+> resvg-SENSITIVE — even the sequential headless auto path gives tiktok 24 paths/4.75% vs browser
+> 58/3.41%, because the ~0.1pp resvg-vs-canvas measure offset FLIPS the guard (edgeDelta<=-0.002 etc)
+> into selecting a worse high result. Palette images are clean (no high-detail). CONCLUSION: engine
+> OUTPUT ports faithfully (Palette + medium-Region); the gap is metric-GUARD decisions riding on the
+> resvg offset. Server port needs BOTH (a) re-baseline the high-detail/dark-glow guards for resvg
+> (engine tuning, not plumbing) AND (b) fine-grained candidate parallelism for a real speedup (>1.4x).
+> Since the in-browser cache already fixed the 96s (->11.5s, live), awaiting user decision: invest in
+> guard re-baseline + fine-grained, or bank the browser win. Committed WIP; browser app UNCHANGED/live.
+>
 > **PHASE 2 SERVER PORT — TWO RISKS RETIRED, ENGINE RUNS HEADLESS -> CODEX (2026-06-30 [claude]):**
 > User chose "Start Phase 2 server port" after the cache fixed the 96s. Two foundational milestones,
 > both committed (not yet deployed — deploy comes after parallelism + endpoint). Full writeups:
