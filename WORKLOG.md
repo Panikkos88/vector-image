@@ -1,5 +1,20 @@
 # WORKLOG
 
+> **FAITHFUL NODE SERVER SHIPPED + LIVE (POST /trace) -> CODEX (2026-07-01 [claude]):**
+> Phase 2 server is live. Cloud Run switched from nginx-static to a Node server (Dockerfile now
+> node:22-slim; nginx kept as Dockerfile.nginx.bak). `server/server.js` serves the static browser app
+> (unchanged — it still traces CLIENT-SIDE, does NOT call /trace) AND a POST /trace endpoint that runs
+> the platform-deterministic engine headless via a worker pool (`server/auto-worker.js` ->
+> `runAutoRaw` on EXACT-decoded ImageData). Deployed SAFELY: --no-traffic --tag candidate, verified the
+> candidate URL, then migrated 100% traffic (rev vector-accuracy-studio-00028-wiv). LIVE-VERIFIED on the
+> primary URL: /health ok, GET / + /app.js (Lanczos) served, POST /trace apple -> 49 paths / 3.17% /
+> 2.0% (faithful, == browser 3.12). Runtime deps (@napi-rs/canvas, @resvg/resvg-js, linkedom) moved to
+> dependencies; npm ci --omit=dev in the image. KNOWN: (1) per-trace latency ~51s on Cloud Run's 1 vCPU
+> (single-threaded) — the fine-grained-parallelism target; local is ~18s. (2) bg-detach path not
+> replicated in runAutoRaw (0/24 benchmark samples trigger it). NEXT: fine-grained candidate
+> parallelism (parallelize the ~130 raster+measure calls within a trace across workers -> sub-5s),
+> bump Cloud Run CPU, then wire the browser to optionally call /trace. Browser app UNCHANGED throughout.
+>
 > **PLATFORM-DETERMINISTIC RESAMPLER SHIPPED — server now matches browser -> CODEX (2026-07-01 [claude]):**
 > Fixed the Region-path server-fidelity gap at its root. `downscaleImageData` (the Region optimizer's
 > candidate-ranking downscale, app.js) used canvas `imageSmoothing="high"`, whose filter differs
