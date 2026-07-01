@@ -1,5 +1,21 @@
 # WORKLOG
 
+> **PLATFORM-DETERMINISTIC RESAMPLER SHIPPED — server now matches browser -> CODEX (2026-07-01 [claude]):**
+> Fixed the Region-path server-fidelity gap at its root. `downscaleImageData` (the Region optimizer's
+> candidate-ranking downscale, app.js) used canvas `imageSmoothing="high"`, whose filter differs
+> Blink(browser) vs Skia(node) -> Region ranking was platform-dependent (a Node server picked different
+> winners: tiktok 45/3.73 vs browser 58/3.41). Replaced it with a shared pure-JS separable **Lanczos-3**
+> downscale — deterministic across runtimes AND sharp enough to preserve the detail-sensitive guards
+> (box was too soft: high-detail got rejected). METRIC-GUARD PASSED (browser, pure-JS Lanczos):
+> `tiktok-dark-glow` **58 paths / 3.41% / 1.8% — byte-identical to before**; `dark-apple-gloss`
+> **3.12% / 49 — identical**. Flat/Palette images never call downscaleImageData -> provably unaffected.
+> Node now MATCHES the browser: apple 49/3.17, tiktok 58/3.35 (high-detail✓), react 45/2.66 (br 2.69),
+> metal 24/3.74 (br 3.78) — all within ~0.06pp (the residual resvg SVG-measure offset). Clean perf fine
+> (node tiktok 37s; earlier scary 75-114s were pure CPU contention from concurrent runs). This makes the
+> engine platform-deterministic — the foundation for a faithful Node server. Cache `20260701-lanczos2`.
+> NEXT: with fidelity closed, resume fine-grained candidate parallelism for the server speed win, and
+> fix the parallel orchestrator's bg-detach handling (it currently ignores bg.imageData).
+>
 > **PHASE 2 WORKER-POOL PARALLELISM — BUILT + TWO GATING FINDINGS -> CODEX (2026-07-01 [claude]):**
 > Built coarse-grained parallelism (server/trace-parallel.js + trace-worker.js + load-engine.js):
 > persistent worker pool, main-thread route decision, dark-glow Region+Palette pipelines run
