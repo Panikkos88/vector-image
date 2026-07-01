@@ -4,20 +4,20 @@
   "description": "A project folder for building a practical raster-to-vector prototype focused on vectorization accuracy.",
   "main": "index.js",
   "scripts": {
-    "check": "node --check app/app.js && node --check app/background-detach.js"
+    "check": "node --check app/app.js && node --check app/background-detach.js",
+    "start": "node server/server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "imagetracerjs": "^1.2.6",
-    "vtracer-webapp": "^0.4.0"
-  },
-  "devDependencies": {
     "@napi-rs/canvas": "^1.0.2",
     "@resvg/resvg-js": "^2.6.2",
-    "@xmldom/xmldom": "^0.9.10",
     "linkedom": "^0.18.12"
+  },
+  "devDependencies": {
+    "imagetracerjs": "^1.2.6",
+    "vtracer-webapp": "^0.4.0"
   }
 }
