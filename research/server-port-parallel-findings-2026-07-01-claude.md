@@ -46,3 +46,44 @@ client. Both require the guard re-baseline first. Recommend deciding explicitly:
 re-baseline + fine-grained parallelism, or bank the in-browser win and treat the server as future
 work. Committed as WIP: server/{load-engine,trace-worker,trace-parallel}.js (faithful for Palette /
 medium-Region; high-detail limitation documented in-code).
+
+## DEEP DIVE (later same day) — the real root cause is PLATFORM-DEPENDENT RASTERISATION
+Chased the tiktok gap to the bottom. It is NOT the guards per se; it is that the engine's decisions
+ride on canvas operations that differ between Skia (Node/@napi-rs) and Blink (Chrome):
+
+1. **imageSmoothing blurs at 1:1 under Skia.** `drawImageToCanvas` (app.js:456) sets
+   `imageSmoothingQuality="high"`. @napi-rs/canvas then alters pixels EVEN at scale=1 (measured: 32,752
+   channels differ vs the raw PNG, maxdiff 26). Chrome does not blur at 1:1. So preparing the source
+   via drawImageToCanvas gives the Node engine a slightly-blurred image -> different trace. Building
+   ImageData by EXACT decode (imageDataFromPng) matches the browser. This is why run-trace.js (routes
+   through drawImageToCanvas) gave tiktok 24/4.75 while the exact-decode path gives 45/3.73 (== the
+   browser's pre-high-detail 45/3.80). ACTION: the server must feed the engine EXACT-decoded ImageData,
+   never drawImageToCanvas. (trace-parallel already does; run-trace.js does not and is thus unfaithful.)
+
+2. **Downscale resampling differs Skia vs Blink.** The Region engine's downscale-eval (app.js:5455-5469)
+   downsamples via canvas `imageSmoothingQuality="high"`. Skia (Mitchell/Catmull-ish) and Blink
+   (Lanczos-ish) produce DIFFERENT downscaled pixels, which cascade into different SLIC superpixels ->
+   different region candidates -> different output. On exact pixels, Node's HIGH-detail Region trace
+   collapses to 27 paths/4.43% (worse than medium 45!) while the browser expands to 58/3.41%. This is
+   pervasive in the Region path (SLIC sweep, downscale-eval, super-retrace all resample), NOT a single
+   guard threshold.
+
+### Consequence
+- PALETTE output ports faithfully today (apple 49 paths, 3.17% ~ 3.12%). Palette does not downscale.
+- REGION output is platform-dependent and can diverge materially (tiktok final 3.73% server-faithful vs
+  3.41% browser, and high-detail is unreachable/degenerate under Node). Re-baselining guards will NOT
+  fix this — the INPUTS to the guards differ because the pixels differ.
+
+### The real fix — make the engine's rasterisation platform-deterministic
+Replace platform-dependent canvas rasterisation in the DECISION path with pure-JS that runs
+identically in browser AND Node:
+1. Source prep + all `imageSmoothingQuality="high"` downscales -> a shared pure-JS resampler
+   (area-average or Lanczos) used by both platforms. Same code -> identical pixels everywhere.
+   Must be metric-guarded in-browser (quality must hold vs the current Skia/Blink downscale) and
+   deployed. This is a real, SAFE-if-guarded change to the shared engine; it also removes browser
+   Skia-vs-other-browser nondeterminism as a bonus.
+2. SVG-measure raster (Blob->Image->drawImage) stays resvg on the server; it is only ~0.05pp off, well
+   below the resampling-induced divergence. Revisit only if a guard is still marginal after (1).
+Then re-verify server==browser across the suite, THEN add fine-grained candidate parallelism for the
+speed win. NB: this is a larger, engine-level effort than "re-baseline a guard" — surfaced for an
+explicit go/no-go given the in-browser 96s fix is already shipped.

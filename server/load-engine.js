@@ -22,11 +22,39 @@ function loadEngine() {
 ;globalThis.__engine = {
   selectorState, devOptions,
   flattenAlphaOverMatte,
+  runBackgroundDetach,
   measureSvgDifference,
   chooseDarkGlowBakeoff,
   countSvgElements,
   estimateSvgPointCount,
+  detailBakeoffEvaluation,
   traceCurrentImage,
+
+  // Diagnostic: run one pipeline at a forced engine + detail, return the rich pipeline object.
+  async runPipelineRaw(imageData, options, forceEngine) {
+    const prev = selectorState.engine;
+    selectorState.engine = forceEngine;
+    try {
+      const bg = runBackgroundDetach(imageData, options);
+      return await runTracePipeline(imageData, imageData, options, options.colors, options.iterations, bg);
+    } finally {
+      selectorState.engine = prev;
+    }
+  },
+
+  // Diagnostic: full auto path (dark-glow bake-off + high-detail), returns traced with all stats.
+  async runAutoRaw(imageData, options) {
+    const prev = selectorState.engine;
+    selectorState.engine = "auto";
+    try {
+      const bg = runBackgroundDetach(imageData, options);
+      let pipeline = await runTracePipeline(imageData, imageData, options, options.colors, options.iterations, bg);
+      pipeline = await runHighDetailBakeoffIfUseful(pipeline, imageData, options, bg);
+      return pipeline;
+    } finally {
+      selectorState.engine = prev;
+    }
+  },
   get currentSvg() { return currentSvg; },
   get loadedImage() { return loadedImage; },
   set loadedImage(v) { loadedImage = v; },
