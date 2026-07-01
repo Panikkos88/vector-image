@@ -5448,25 +5448,86 @@ async function superRetraceRegion(result, segSource, pipelineOptions, referenceI
   }
 }
 
-// Downscale an ImageData to a max dimension via canvas (high-quality), for fast optimizer eval.
+// Separable Lanczos-3 downscale in pure JS — deterministic and identical across JS runtimes, and
+// SHARPER than the box filter (closer to the Blink/Skia canvas "high" resampling the engine's guards
+// were tuned against, so it preserves detail-sensitive decisions like the High-detail bake-off).
+function lanczosKernel(x, a) {
+  if (x === 0) return 1;
+  if (x <= -a || x >= a) return 0;
+  const px = Math.PI * x;
+  return (a * Math.sin(px) * Math.sin(px / a)) / (px * px);
+}
+function buildLanczosWeights(srcLen, dstLen, a) {
+  const scale = srcLen / dstLen;      // > 1 for downscale
+  const support = a * scale;
+  const rows = [];
+  for (let d = 0; d < dstLen; d += 1) {
+    const center = (d + 0.5) * scale - 0.5;
+    const start = Math.max(0, Math.ceil(center - support));
+    const end = Math.min(srcLen - 1, Math.floor(center + support));
+    const idx = [];
+    const wts = [];
+    let sum = 0;
+    for (let s = start; s <= end; s += 1) {
+      const w = lanczosKernel((s - center) / scale, a);
+      if (w === 0) continue;
+      idx.push(s);
+      wts.push(w);
+      sum += w;
+    }
+    if (sum !== 0) for (let i = 0; i < wts.length; i += 1) wts[i] /= sum;
+    rows.push({ idx, wts });
+  }
+  return rows;
+}
+function resampleImageDataLanczos(imageData, dstW, dstH, a = 3) {
+  const { width: srcW, height: srcH, data: src } = imageData;
+  const colW = buildLanczosWeights(srcW, dstW, a);
+  const rowW = buildLanczosWeights(srcH, dstH, a);
+  // Pass 1: horizontal (srcH x dstW), float.
+  const tmp = new Float32Array(srcH * dstW * 4);
+  for (let y = 0; y < srcH; y += 1) {
+    const srow = y * srcW * 4;
+    const trow = y * dstW * 4;
+    for (let dx = 0; dx < dstW; dx += 1) {
+      const { idx, wts } = colW[dx];
+      let r = 0, g = 0, b = 0, al = 0;
+      for (let k = 0; k < idx.length; k += 1) {
+        const si = srow + idx[k] * 4;
+        const w = wts[k];
+        r += src[si] * w; g += src[si + 1] * w; b += src[si + 2] * w; al += src[si + 3] * w;
+      }
+      const ti = trow + dx * 4;
+      tmp[ti] = r; tmp[ti + 1] = g; tmp[ti + 2] = b; tmp[ti + 3] = al;
+    }
+  }
+  // Pass 2: vertical (dstH x dstW).
+  const dst = new Uint8ClampedArray(dstW * dstH * 4);
+  for (let dy = 0; dy < dstH; dy += 1) {
+    const { idx, wts } = rowW[dy];
+    const drow = dy * dstW * 4;
+    for (let dx = 0; dx < dstW; dx += 1) {
+      let r = 0, g = 0, b = 0, al = 0;
+      for (let k = 0; k < idx.length; k += 1) {
+        const ti = idx[k] * dstW * 4 + dx * 4;
+        const w = wts[k];
+        r += tmp[ti] * w; g += tmp[ti + 1] * w; b += tmp[ti + 2] * w; al += tmp[ti + 3] * w;
+      }
+      const di = drow + dx * 4;
+      dst[di] = r; dst[di + 1] = g; dst[di + 2] = b; dst[di + 3] = al;
+    }
+  }
+  return new ImageData(dst, dstW, dstH);
+}
+
+// Downscale an ImageData to a max dimension (pure JS, engine-independent), for fast optimizer eval.
 function downscaleImageData(imageData, maxDim) {
   const { width, height } = imageData;
   const scale = Math.min(1, maxDim / Math.max(width, height));
   if (scale >= 1) return imageData;
   const w = Math.max(1, Math.round(width * scale));
   const h = Math.max(1, Math.round(height * scale));
-  const srcCanvas = document.createElement("canvas");
-  srcCanvas.width = width;
-  srcCanvas.height = height;
-  srcCanvas.getContext("2d").putImageData(imageData, 0, 0);
-  const dstCanvas = document.createElement("canvas");
-  dstCanvas.width = w;
-  dstCanvas.height = h;
-  const ctx = dstCanvas.getContext("2d", { willReadFrequently: true });
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(srcCanvas, 0, 0, w, h);
-  return ctx.getImageData(0, 0, w, h);
+  return resampleImageDataLanczos(imageData, w, h, 3);
 }
 
 async function optimizeRegionTrace(segSource, referenceImageData, pipelineOptions, backgroundColor) {
